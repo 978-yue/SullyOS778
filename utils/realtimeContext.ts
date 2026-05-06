@@ -726,6 +726,13 @@ export const NotionManager = {
                 console.error('Query diaries failed:', response.status, text);
                 let detail = String(response.status);
                 try { const j = JSON.parse(text); detail = j.message || j.error || detail; } catch {}
+                if (response.status === 404) {
+                    return {
+                        success: false,
+                        entries: [],
+                        message: '日记数据库未找到：请检查【日记数据库 ID】是否填对，并在 Notion 该数据库右上角 Share 里把集成（Integration）也加上'
+                    };
+                }
                 return { success: false, entries: [], message: `查询失败: ${detail}` };
             }
 
@@ -849,7 +856,12 @@ export const NotionManager = {
 
             if (!response.ok) {
                 console.error('Read diary content failed:', response.status, text);
-                return { success: false, content: '', message: `读取失败: ${response.status}` };
+                let detail = String(response.status);
+                try { const j = JSON.parse(text); detail = j.message || j.error || detail; } catch {}
+                if (response.status === 404) {
+                    return { success: false, content: '', message: `读取失败: 页面不存在或集成未授权访问该页面 (${detail})` };
+                }
+                return { success: false, content: '', message: `读取失败: ${detail}` };
             }
 
             const data = JSON.parse(text);
@@ -894,7 +906,16 @@ export const NotionManager = {
 
             if (!response.ok) {
                 console.error('Query user notes failed:', response.status, text);
-                return { success: false, entries: [], message: `查询失败: ${response.status}` };
+                let detail = String(response.status);
+                try { const j = JSON.parse(text); detail = j.message || j.error || detail; } catch {}
+                if (response.status === 404) {
+                    return {
+                        success: false,
+                        entries: [],
+                        message: '笔记数据库未找到：请检查【用户笔记数据库 ID】是否填对，并在 Notion 该数据库右上角 Share 里把集成（Integration）也加上'
+                    };
+                }
+                return { success: false, entries: [], message: `查询失败: ${detail}` };
             }
 
             const data = JSON.parse(text);
