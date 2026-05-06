@@ -506,43 +506,107 @@ export interface DiaryPreview {
     url: string;
 }
 
+interface NotionDbProps {
+    titleProp: string;
+    dateProp: string;
+    dbTitle: string;
+}
+
+// Cache resolved property names per database to avoid hitting the schema endpoint
+// on every read/write. Keyed by `${apiKey}:${databaseId}` so credential changes
+// invalidate the entry naturally.
+const dbPropsCache = new Map<string, NotionDbProps>();
+
+// Names users commonly choose for a date column. We prefer these in order, then
+// fall back to the first `type: 'date'` property we find. This is what makes the
+// integration tolerant of "Date" vs "Data" (a frequent typo) vs Chinese labels.
+const DATE_PROP_PREFERENCES = ['Date', 'Data', '日期', '时间', 'Created', 'Created time'];
+
+async function fetchDatabaseSchema(apiKey: string, databaseId: string): Promise<{ ok: true; data: any } | { ok: false; status: number; message: string }> {
+    try {
+        const response = await fetch(`${NotionManager.WORKER_URL}/notion/database/${databaseId}`, {
+            method: 'GET',
+            headers: { 'X-Notion-API-Key': apiKey }
+        });
+        const text = await response.text();
+        if (!response.ok) {
+            let msg = String(response.status);
+            try {
+                const j = JSON.parse(text);
+                msg = j.message || j.error || msg;
+            } catch { /* keep status */ }
+            return { ok: false, status: response.status, message: msg };
+        }
+        return { ok: true, data: JSON.parse(text) };
+    } catch (e: any) {
+        return { ok: false, status: 0, message: e?.message || String(e) };
+    }
+}
+
+function resolvePropsFromSchema(data: any): { titleProp: string | null; dateProp: string | null; dbTitle: string } {
+    const props = data?.properties || {};
+    let titleProp: string | null = null;
+    const dateProps: string[] = [];
+    for (const [name, def] of Object.entries(props)) {
+        const type = (def as any)?.type;
+        if (type === 'title' && !titleProp) titleProp = name;
+        if (type === 'date') dateProps.push(name);
+    }
+    let dateProp: string | null = null;
+    for (const pref of DATE_PROP_PREFERENCES) {
+        if (dateProps.includes(pref)) { dateProp = pref; break; }
+    }
+    if (!dateProp && dateProps.length > 0) dateProp = dateProps[0];
+    const dbTitle = data?.title?.[0]?.plain_text || '';
+    return { titleProp, dateProp, dbTitle };
+}
+
+async function resolveDbProps(apiKey: string, databaseId: string): Promise<{ ok: true; props: NotionDbProps } | { ok: false; message: string }> {
+    const key = `${apiKey}:${databaseId}`;
+    const cached = dbPropsCache.get(key);
+    if (cached) return { ok: true, props: cached };
+
+    const schema = await fetchDatabaseSchema(apiKey, databaseId);
+    if (!schema.ok) return { ok: false, message: schema.message };
+
+    const { titleProp, dateProp, dbTitle } = resolvePropsFromSchema(schema.data);
+    if (!titleProp) {
+        return { ok: false, message: '数据库缺少标题(Title)列，请在 Notion 中添加一个标题类型的列' };
+    }
+    if (!dateProp) {
+        return { ok: false, message: '数据库缺少日期(Date)列，请在 Notion 中添加一个日期类型的列（推荐命名为 Date）' };
+    }
+    const props: NotionDbProps = { titleProp, dateProp, dbTitle };
+    dbPropsCache.set(key, props);
+    return { ok: true, props };
+}
+
 export const NotionManager = {
 
     // Worker 代理地址
     WORKER_URL: 'https://sullymeow.ccwu.cc',
 
     /**
-     * 测试 Notion 连接（通过 Worker 代理）
+     * 测试 Notion 连接 + 校验数据库 schema（必须有 title 列和 date 列）
      */
     testConnection: async (apiKey: string, databaseId: string): Promise<{ success: boolean; message: string }> => {
-        try {
-            const response = await fetch(`${NotionManager.WORKER_URL}/notion/database/${databaseId}`, {
-                method: 'GET',
-                headers: {
-                    'X-Notion-API-Key': apiKey
-                }
-            });
-
-            const text = await response.text();
-
-            if (!response.ok) {
-                try {
-                    const errJson = JSON.parse(text);
-                    return { success: false, message: `连接失败: ${errJson.error || errJson.message || response.status}` };
-                } catch {
-                    return { success: false, message: `连接失败: ${response.status}` };
-                }
-            }
-
-            try {
-                const data = JSON.parse(text);
-                return { success: true, message: `连接成功！数据库: ${data.title?.[0]?.plain_text || databaseId}` };
-            } catch {
-                return { success: false, message: '返回格式错误' };
-            }
-        } catch (e: any) {
-            return { success: false, message: `网络错误: ${e.message}` };
+        const schema = await fetchDatabaseSchema(apiKey, databaseId);
+        if (!schema.ok) {
+            return { success: false, message: `连接失败: ${schema.message}` };
         }
+        const { titleProp, dateProp, dbTitle } = resolvePropsFromSchema(schema.data);
+        if (!titleProp) {
+            return { success: false, message: '连接成功但数据库缺少标题(Title)列，请添加后再保存' };
+        }
+        if (!dateProp) {
+            return { success: false, message: `连接成功但数据库缺少日期(Date)列。请添加一个日期类型的列（推荐命名为 Date）` };
+        }
+        // Refresh cache with the latest resolved schema
+        dbPropsCache.set(`${apiKey}:${databaseId}`, { titleProp, dateProp, dbTitle });
+        return {
+            success: true,
+            message: `连接成功！数据库: ${dbTitle || databaseId}（标题列: ${titleProp}, 日期列: ${dateProp}）`
+        };
     },
 
     /**
@@ -561,6 +625,13 @@ export const NotionManager = {
             // 使用 markdown 解析器生成丰富的 Notion blocks
             const children = parseMarkdownToNotionBlocks(entry.content, entry.mood, entry.characterName);
 
+            // 解析数据库的实际列名（兼容用户把日期列命名为 Data / 日期 / 时间 等）
+            const resolved = await resolveDbProps(apiKey, databaseId);
+            if (!resolved.ok) {
+                return { success: false, message: `写入失败: ${resolved.message}` };
+            }
+            const { titleProp, dateProp } = resolved.props;
+
             // 构建页面数据，标题包含角色名便于筛选
             const titlePrefix = entry.characterName ? `[${entry.characterName}] ` : '';
             const moodEmoji = getMoodEmoji(entry.mood || '平静');
@@ -568,10 +639,10 @@ export const NotionManager = {
                 parent: { database_id: databaseId },
                 icon: { emoji: moodEmoji },
                 properties: {
-                    'Name': {
+                    [titleProp]: {
                         title: [{ text: { content: `${titlePrefix}${entry.title || dateStr + ' 的日记'}` } }]
                     },
-                    'Date': {
+                    [dateProp]: {
                         date: { start: dateStr }
                     }
                 },
@@ -624,6 +695,12 @@ export const NotionManager = {
         limit: number = 5
     ): Promise<{ success: boolean; entries: DiaryPreview[]; message: string }> => {
         try {
+            const resolved = await resolveDbProps(apiKey, databaseId);
+            if (!resolved.ok) {
+                return { success: false, entries: [], message: `查询失败: ${resolved.message}` };
+            }
+            const { titleProp, dateProp } = resolved.props;
+
             const response = await fetch(`${NotionManager.WORKER_URL}/notion/query`, {
                 method: 'POST',
                 headers: {
@@ -633,12 +710,12 @@ export const NotionManager = {
                 body: JSON.stringify({
                     database_id: databaseId,
                     filter: {
-                        property: 'Name',
+                        property: titleProp,
                         title: {
                             starts_with: `[${characterName}]`
                         }
                     },
-                    sorts: [{ property: 'Date', direction: 'descending' }],
+                    sorts: [{ property: dateProp, direction: 'descending' }],
                     page_size: limit
                 })
             });
@@ -647,7 +724,9 @@ export const NotionManager = {
 
             if (!response.ok) {
                 console.error('Query diaries failed:', response.status, text);
-                return { success: false, entries: [], message: `查询失败: ${response.status}` };
+                let detail = String(response.status);
+                try { const j = JSON.parse(text); detail = j.message || j.error || detail; } catch {}
+                return { success: false, entries: [], message: `查询失败: ${detail}` };
             }
 
             const data = JSON.parse(text);
@@ -657,13 +736,13 @@ export const NotionManager = {
             }
 
             const entries: DiaryPreview[] = data.results.map((page: any) => {
-                const title = page.properties?.Name?.title?.[0]?.plain_text || '无标题';
+                const title = page.properties?.[titleProp]?.title?.[0]?.plain_text || '无标题';
                 // 移除角色名前缀，只保留实际标题
                 const cleanTitle = title.replace(/^\[.*?\]\s*/, '');
                 return {
                     id: page.id,
                     title: cleanTitle,
-                    date: page.properties?.Date?.date?.start || '',
+                    date: page.properties?.[dateProp]?.date?.start || '',
                     url: page.url
                 };
             });
@@ -686,6 +765,12 @@ export const NotionManager = {
         date: string  // YYYY-MM-DD
     ): Promise<{ success: boolean; entries: DiaryPreview[]; message: string }> => {
         try {
+            const resolved = await resolveDbProps(apiKey, databaseId);
+            if (!resolved.ok) {
+                return { success: false, entries: [], message: `查询失败: ${resolved.message}` };
+            }
+            const { titleProp, dateProp } = resolved.props;
+
             const response = await fetch(`${NotionManager.WORKER_URL}/notion/query`, {
                 method: 'POST',
                 headers: {
@@ -697,16 +782,16 @@ export const NotionManager = {
                     filter: {
                         and: [
                             {
-                                property: 'Name',
+                                property: titleProp,
                                 title: { starts_with: `[${characterName}]` }
                             },
                             {
-                                property: 'Date',
+                                property: dateProp,
                                 date: { equals: date }
                             }
                         ]
                     },
-                    sorts: [{ property: 'Date', direction: 'descending' }],
+                    sorts: [{ property: dateProp, direction: 'descending' }],
                     page_size: 10
                 })
             });
@@ -715,7 +800,9 @@ export const NotionManager = {
 
             if (!response.ok) {
                 console.error('Query diary by date failed:', response.status, text);
-                return { success: false, entries: [], message: `查询失败: ${response.status}` };
+                let detail = String(response.status);
+                try { const j = JSON.parse(text); detail = j.message || j.error || detail; } catch {}
+                return { success: false, entries: [], message: `查询失败: ${detail}` };
             }
 
             const data = JSON.parse(text);
@@ -725,12 +812,12 @@ export const NotionManager = {
             }
 
             const entries: DiaryPreview[] = data.results.map((page: any) => {
-                const title = page.properties?.Name?.title?.[0]?.plain_text || '无标题';
+                const title = page.properties?.[titleProp]?.title?.[0]?.plain_text || '无标题';
                 const cleanTitle = title.replace(/^\[.*?\]\s*/, '');
                 return {
                     id: page.id,
                     title: cleanTitle,
-                    date: page.properties?.Date?.date?.start || '',
+                    date: page.properties?.[dateProp]?.date?.start || '',
                     url: page.url
                 };
             });
@@ -863,6 +950,9 @@ export const NotionManager = {
         limit: number = 5
     ): Promise<{ success: boolean; entries: DiaryPreview[]; message: string }> => {
         try {
+            const resolved = await resolveDbProps(apiKey, notesDatabaseId);
+            const titleProp = resolved.ok ? resolved.props.titleProp : 'Name';
+
             const response = await fetch(`${NotionManager.WORKER_URL}/notion/query`, {
                 method: 'POST',
                 headers: {
@@ -872,7 +962,7 @@ export const NotionManager = {
                 body: JSON.stringify({
                     database_id: notesDatabaseId,
                     filter: {
-                        property: 'Name',
+                        property: titleProp,
                         title: { contains: keyword }
                     },
                     sorts: [{ timestamp: 'last_edited_time', direction: 'descending' }],
@@ -883,7 +973,9 @@ export const NotionManager = {
             const text = await response.text();
 
             if (!response.ok) {
-                return { success: false, entries: [], message: `搜索失败: ${response.status}` };
+                let detail = String(response.status);
+                try { const j = JSON.parse(text); detail = j.message || j.error || detail; } catch {}
+                return { success: false, entries: [], message: `搜索失败: ${detail}` };
             }
 
             const data = JSON.parse(text);
