@@ -9,6 +9,8 @@ import { VR_DEFAULT_INTERVAL_MIN } from '../utils/vrWorld/constants';
 import { ChatParser } from '../utils/chatParser';
 import { safeFetchJson } from '../utils/safeApi';
 import { recordApiCall, setApiCallAmbientContext } from '../utils/apiCallLog';
+import { setUiPresence } from '../utils/uiPresence';
+import { ActiveMsgRuntime } from '../utils/activeMsgRuntime';
 import { INSTALLED_APPS } from '../constants';
 import { normalizeCharacterImpression, normalizeCharacterDefaults } from '../utils/impression';
 import { isScheduleFeatureOn } from '../utils/scheduleGenerator';
@@ -715,6 +717,17 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       const char = characters.find(c => c.id === activeCharacterId);
       setApiCallAmbientContext({ appId: activeApp, appName, charId: char?.id, charName: char?.name });
   }, [activeApp, activeCharacterId, characters]);
+
+  // --- UI presence 快照（行为判断用，与上面的日志兜底分开） ---
+  // activeMsgRuntime 用它在见面中压住 ActiveMsg2 定时消息；退出 DateApp 时排空补送。
+  const prevPresenceAppRef = useRef<AppID | null>(null);
+  useEffect(() => {
+      setUiPresence(activeApp, activeCharacterId);
+      if (prevPresenceAppRef.current === AppID.Date && activeApp !== AppID.Date) {
+          void ActiveMsgRuntime.flushInbox();
+      }
+      prevPresenceAppRef.current = activeApp;
+  }, [activeApp, activeCharacterId]);
 
   // --- Global Error Interception ---
   useEffect(() => {

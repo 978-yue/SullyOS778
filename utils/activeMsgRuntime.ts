@@ -1,6 +1,7 @@
 import { ActiveMsg2InboxMessage, APIConfig, RealtimeConfig, UserProfile } from '../types';
 import { DB } from './db';
 import { ActiveMsgStore } from './activeMsgStore';
+import { isDatingChar } from './uiPresence';
 import {
   applyAssistantPostProcessing,
   type PostProcessDirective,
@@ -464,6 +465,26 @@ const flushInboxToChatImpl = async () => {
       continue;
     }
 
+    // 用户正在 DateApp 里和这个角色面对面见面 —— ActiveMsg2 定时任务的消息这轮不投递,
+    // requeue 回 inbox, 等用户退出见面后 (OSContext presence 变化触发 flushInbox) 再送达。
+    // 只拦定时任务类 push (fixed/prompted/auto 或 metadata.source==='active_msg_2');
+    // instant 聊天回复绝不能拦 —— sendInstantPush 的 receipt 匹配依赖它那条
+    // 'active-msg-received' (见 docs/instant-push-dual-channel.md), 压住会被误判 send-failed。
+    const isScheduledActiveMsg = message.messageType === 'fixed'
+      || message.messageType === 'prompted'
+      || message.messageType === 'auto'
+      || (message.metadata as any)?.source === 'active_msg_2';
+    if (isScheduledActiveMsg && isDatingChar(message.charId)) {
+      try {
+        await ActiveMsgStore.saveInboxMessage(message);
+        activeMsgTrace('runtime-defer-dating', { messageId: message.messageId, charId: message.charId });
+        continue;
+      } catch (e) {
+        // requeue 失败就照常投递, 总比丢消息强
+        log.warn('defer-dating requeue failed, delivering anyway', { messageId: message.messageId, error: e });
+      }
+    }
+
     // 白名单制: AI 文本类型基本封闭 (amsg-shared MESSAGE_TYPE 4 个 + SullyOS 3 个 legacy 别名);
     // 非 AI 类型 (forum / event / system / 未来扩展) 不可枚举, 不进 post-processing 防把它们当 AI 输出乱解析.
     // Phase 1 老白名单只列了 text/assistant/normal, 漏了整个 amsg-shared 集合, 导致所有 push 都
@@ -631,6 +652,11 @@ const handleDeepLink = () => {
 };
 
 export const ActiveMsgRuntime = {
+  /** 手动排空 inbox。给 OSContext 在用户退出 DateApp 时调用，送达见面期间被压住的定时消息。 */
+  flushInbox(): Promise<void> {
+    return flushInboxToChat();
+  },
+
   async init() {
     if (initialized) return;
     initialized = true;
