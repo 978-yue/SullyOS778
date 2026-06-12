@@ -29,7 +29,7 @@ isDevDebugAvailable()  // utils/devDebug.ts
 
 **关键含义**：在 master 上本地想调试，跑 `VITE_SHOW_BUILD_BADGE=1 pnpm dev` 即可，不用改代码。
 
-**正式版排障（手动解锁）**：设置页底部连点 `VersionInfo`（构建版本那栏）5 下 → `unlockDevDebug()` **会话级**解锁（**不落 localStorage**），`isDevDebugAvailable()` 放行、`<DevDebugPanel />` 经 `subscribeDevDebugAvailability` 即时弹出。
+**正式版排障（手动解锁）**：设置页底部连点 `VersionInfo`（构建版本那栏）5 下 → `unlockDevDebug()` **会话级**解锁（**不落 localStorage**），`isDevDebugAvailable()` 放行、`<DevDebugPanel />` 经 `subscribeDevDebugAvailability` 即时弹出。右下角的 `BuildBadge` 角标也会跟着出现——但只显示 **sw 版本 + branch@commit 两行**，不带「开发中内容，不代表最终效果」那行声明（正式版不是开发预览）；用途是排障时让用户截图核对**实际在跑哪个构建**（PWA 的 SW 缓存经常让用户停在旧版本上）。面板关闭 / 刷新后角标随可用性一起消失。
 
 **怎么关掉**：
 - **刷新页面**：`manualUnlock` 清零 → prod 回到隐藏；非 prod 因 `__BUILD_BADGE_VISIBLE__` 默认可见，刷新后照常显示（即「非 prod 一直开」）。
@@ -48,6 +48,7 @@ isDevDebugAvailable()  // utils/devDebug.ts
 | `utils/devDebug.ts` | 核心：类型、存储读写、事件、分类捕获、便捷 getter。**所有逻辑都在这** |
 | `components/DevDebugPanel.tsx` | 悬浮按钮 + 面板 UI（拖拽、开关行、复制 / 下载日志、重置） |
 | `components/settings/VersionInfo.tsx` | 设置页底部版本脚注（APP_VERSION + build hash + sw 版本）；连点 5 下手动解锁面板 |
+| `components/BuildBadge.tsx` | 右下角构建角标：dev / fork 分支常驻三行；正式分支默认隐藏、解锁面板期间显示两行（sw + branch@commit，无「开发中内容」声明） |
 | `utils/swVersion.ts` | `querySwVersion()`：向 SW 查版本号（BuildBadge / VersionInfo 共用） |
 | `App.tsx` | 挂载 `<DevDebugPanel />`（无脑挂，组件内部自己判断要不要渲染） |
 | `vite.config.ts` | 注入 `__BUILD_BRANCH__` / `__BUILD_COMMIT__` / `__BUILD_BADGE_VISIBLE__` |

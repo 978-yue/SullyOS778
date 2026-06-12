@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { querySwVersion } from '../utils/swVersion';
 import { BUILD_LABEL } from '../utils/buildInfo';
+import { isDevDebugAvailable, subscribeDevDebugAvailability } from '../utils/devDebug';
 
 /**
  * 构建版本指示器：右下角阶梯式堆三行
@@ -10,30 +11,35 @@ import { BUILD_LABEL } from '../utils/buildInfo';
  *
  * - 右侧贴齐成竖直线；左侧每行根据实测宽度动态决定圆角（仅在"伸出邻行"一侧）。
  *   分支名长度可变，所以行宽顺序不固定，需要 useLayoutEffect 在 paint 前测量。
- * - 仅当 vite.config 注入的 __BUILD_BADGE_VISIBLE__ 为 true 时挂载
- *   （VITE_HIDE_BUILD_BADGE=1 时构建会把它编译成 false → 树摇掉）
+ * - vite.config 注入的 __BUILD_BADGE_VISIBLE__ 为 true（dev / fork 分支）时常驻三行。
+ * - 正式分支（__BUILD_BADGE_VISIBLE__=false）默认不渲染，但**调试面板解锁期间跟着出现**
+ *   （设置页连点构建版本 5 下，见 utils/devDebug 的可用性逻辑），用于排障时核对用户
+ *   实际在跑哪个构建——只显示 sw 版本 + branch@commit 两行，不带「开发中内容」声明
+ *   （正式版不是开发预览）。面板关闭 / 刷新后随可用性一起消失。
  * - SW 版本通过 utils/swVersion 的 GET_SW_VERSION 协议查询；SW 未注册 /
- *   不响应时显示 sw@?
+ *   不响应时显示 sw@?（查询只在可见时发起，正式版未解锁时零开销）
  * - pointer-events-none + select-none：不可点、不可选、不影响下层交互
  * - z-[2147483647]：保证盖在所有 modal / 动画 / 全屏覆盖层之上
  * - safe-area-inset：iOS PWA 底部 home indicator 区域避让
  *
- * 注：这是 dev / fork 专用的醒目角标。正式版（main/master）会被树摇掉，
- * 但构建 / SW 版本仍通过 Settings 底部的 VersionInfo 低调展示，方便用户报障。
+ * 注：正式版平时构建 / SW 版本仍通过 Settings 底部的 VersionInfo 低调展示，方便用户报障。
  */
 const BuildBadge: React.FC = () => {
-    if (!__BUILD_BADGE_VISIBLE__) return null;
-
     const buildLabel = BUILD_LABEL;
     const [swVersion, setSwVersion] = useState<string>('…');
     const lineRefs = useRef<Array<HTMLSpanElement | null>>([]);
     const [widths, setWidths] = useState<number[] | null>(null);
+    // 正式分支上跟随调试面板可用性（解锁出现、关闭 / 刷新消失）；dev 分支恒可见，不受面板影响。
+    const [devDebugVisible, setDevDebugVisible] = useState(() => isDevDebugAvailable());
+    useEffect(() => subscribeDevDebugAvailability(setDevDebugVisible), []);
+    const visible = __BUILD_BADGE_VISIBLE__ || devDebugVisible;
 
     useEffect(() => {
+        if (!visible) return;
         let cancelled = false;
         querySwVersion().then((v) => { if (!cancelled) setSwVersion(v); });
         return () => { cancelled = true; };
-    }, []);
+    }, [visible]);
 
     // 右侧贴齐 (rounded-tr 仅顶行, rounded-br 仅末行)。
     // 左侧逐行测宽: 仅当当前行严格宽于上 / 下邻行时, 该侧伸出, 才给圆角;
@@ -41,13 +47,19 @@ const BuildBadge: React.FC = () => {
     const lines: Array<{ text: string; cls: string }> = [
         { text: `sw@${swVersion}`, cls: 'text-[9px] tracking-wider' },
         { text: buildLabel, cls: 'text-[9px] tracking-wider' },
-        { text: '开发中内容，不代表最终效果', cls: 'text-[8px] tracking-normal text-white/35' },
+        // 「开发中内容」声明只在 dev / fork 构建显示；正式版解锁调出的角标不带它。
+        ...(__BUILD_BADGE_VISIBLE__
+            ? [{ text: '开发中内容，不代表最终效果', cls: 'text-[8px] tracking-normal text-white/35' }]
+            : []),
     ];
     const lastIdx = lines.length - 1;
 
     useLayoutEffect(() => {
+        if (!visible) return;
         setWidths(lineRefs.current.map((r) => r?.offsetWidth ?? 0));
-    }, [swVersion, buildLabel]);
+    }, [swVersion, buildLabel, visible]);
+
+    if (!visible) return null;
 
     const cornerClass = (i: number): string => {
         const w = widths?.[i];
