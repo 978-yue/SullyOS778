@@ -1080,6 +1080,14 @@ export const useChatAI = ({
                 for (let it = 0; it < MAX_LOOPS; it++) {
                     const toolCalls = data.choices?.[0]?.message?.tool_calls;
                     if (!toolCalls || !toolCalls.length) break;
+                    // ★ 兜底 tool_call_id: Gemini 没有原生 tool_call id, 中转(千岛等)是临时伪造的,
+                    //   有时不给 / 给不全 → 回填的 tool 消息配不上 assistant.tool_calls → 整条请求 400。
+                    //   表现就是"代码没变也时好时坏""没门店时重试轮数多、更容易撞上"。
+                    //   这里强制给每个 tool_call 补一个稳定 id, 并保证下面 tool 回复复用同一个 (见 tc.id),
+                    //   不再依赖中转给不给 —— 配对永远成立, 不会再因此 400。
+                    toolCalls.forEach((tc: any, idx: number) => {
+                        if (!tc.id) tc.id = `lk_tc_${it}_${idx}_${Math.random().toString(36).slice(2, 8)}`;
+                    });
                     loopMessages.push({
                         role: 'assistant',
                         // 空 content + tool_calls 在 Gemini 兼容层会被判 INVALID_ARGUMENT, 给个占位
@@ -1165,6 +1173,16 @@ export const useChatAI = ({
             // Phase 1 会让 instant push 路径也调它 (skipSecondPassLLM=true);
             // Phase 2 会让 worker 端把识别的副作用打包成 directives 传过来重放。
             const rawAiContent = data.choices?.[0]?.message?.content || '';
+            // ★ 拉不到 / 被拦截要明确报错, 别让角色"空回"看起来像没反应或乱打。
+            //   瑞一杯下若这轮模型一个字都没吐 (content_filter / 中转吞了 / 工具循环没收尾), 落一条明确说明。
+            if (luckinChatRef?.current?.active && !rawAiContent.trim()) {
+                const fr = data.choices?.[0]?.finish_reason;
+                await DB.saveMessage({
+                    charId: char.id, role: 'system', type: 'text',
+                    content: `[瑞一杯] 这轮模型没有返回任何文字${fr ? ` (finish_reason=${fr})` : ''}。${fr === 'content_filter' ? '被中转/模型的内容过滤拦下了' : '可能被中转吞了, 或工具循环没正常收尾'}。点单的卡片若已出现可直接用; 没有就重试一次, 或换个中转/模型。`,
+                });
+                setMessages(await DB.getRecentMessagesByCharId(char.id, 200));
+            }
             const xhsCaches: XhsCaches = {
                 xsecTokenCache: xsecTokenCacheRef.current,
                 noteTitleCache: noteTitleCacheRef.current,
@@ -1209,12 +1227,12 @@ export const useChatAI = ({
             // 注意: 这个 catch 兜的是「拿到 API 响应之后」的整条后处理管线 (applyAssistantPostProcessing,
             // 13 步)。这里抛错多半不是网络问题, 而是解析/正则/落库异常。别再叫"连接中断"误导排查。
             const errMsg = e?.message || String(e);
-            // 瑞一杯模式下报错: 大概率是聊天模型/中转不支持 function calling(tools) → 带 tools 一发就 400。
-            // 在 APK 里看不到控制台, 这里把完整原因 + 解法存成可读消息, 方便排查。
-            if (luckinChatRef?.current?.active && /\b400\b|tool|function[_\s-]?call/i.test(errMsg)) {
+            // 瑞一杯模式下报错: 把 API/中转返回的原文照实落出来, 不臆断原因 (APK 里看不到控制台)。
+            // 不再写死"模型不支持函数调用"——麦当劳同样带 tools 能跑, 说明是支持的; 真实原因看原文。
+            if (luckinChatRef?.current?.active) {
                 await DB.saveMessage({
                     charId: char.id, role: 'system', type: 'text',
-                    content: `[瑞一杯失败] ${errMsg}\n\n大概率是你当前聊天用的「模型/中转」不支持函数调用(function calling / tools)——瑞一杯靠角色自己调工具点单, 模型不支持就会直接报 400。\n解决: 换一个支持 tools 的模型/中转 (如官方 OpenAI / Claude / 多数主流中转)。\n另外确认: APK 是全新存储, 你的聊天 API 配置(密钥/地址/模型)在 APK 里填好了吗?`,
+                    content: `[瑞一杯失败] 下面是本次点单的报错原文 (来自 API/中转, 未改写):\n${errMsg}\n\n常见原因: 中转对 tool_call 的 id / 参数处理不稳定(同样请求时好时坏), 或中转拒了带工具的请求。先重试一次; 仍不行就换个中转/模型。`,
                 });
             } else {
                 await DB.saveMessage({ charId: char.id, role: 'system', type: 'text', content: `[回复处理失败: ${errMsg}]` });
