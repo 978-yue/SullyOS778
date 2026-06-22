@@ -106,8 +106,18 @@ export async function generatePersonaScript(opts: {
     const data = await safeResponseJson(res);
     // 截断直接报错，不兜底：模型输出被 token 上限截断时 finish_reason 为 'length'
     if (data.choices?.[0]?.finish_reason === 'length') throw new Error('演出生成被截断');
-    const parsed = parseScript(data.choices[0].message.content);
-    if (!parsed || !parsed.beats?.length) throw new Error('parse');
+    const rawContent: string = data.choices?.[0]?.message?.content ?? '';
+    const parsed = parseScript(rawContent);
+    // 诊断友好：把失败原因和原文片段带进报错，方便从「系统调试终端」复制定位
+    if (!parsed) {
+        const head = rawContent.slice(0, 200).replace(/\s+/g, ' ');
+        const tail = rawContent.length > 400 ? ' … ' + rawContent.slice(-200).replace(/\s+/g, ' ') : '';
+        // 大括号能配上但解析仍失败 → 多半是字符串里有未转义引号；配不上 → 多半是被截断
+        const balanced = rawContent.lastIndexOf('}') > rawContent.indexOf('{') && rawContent.indexOf('{') !== -1;
+        const hint = !rawContent.trim() ? '模型返回为空' : balanced ? 'JSON 语法错误(疑似未转义引号)' : '输出不完整/疑似截断';
+        throw new Error(`演出解析失败: ${hint} · len=${rawContent.length} · ${head}${tail}`);
+    }
+    if (!parsed.beats?.length) throw new Error('演出解析失败: 无 beats');
     // 不兜底：结尾必须是模型自己收束好的 end，否则视为不完整/被截断，报错让用户重试
     if (parsed.beats[parsed.beats.length - 1].kind !== 'end') throw new Error('演出结尾不完整');
     return parsed;
@@ -1260,6 +1270,8 @@ function parseScript(raw: string): SimScript | null {
     const last = s.lastIndexOf('}');
     if (first === -1 || last === -1) return null;
     s = s.slice(first, last + 1);
+    // 状态机修复：① 把字符串内的裸控制字符转义；② 去掉 } / ] 前的尾随逗号（仅在字符串外）。
+    // 这两类是 LLM 输出 JSON 最常见的语法破坏。
     const repair = (str: string) => {
         let inStr = false, esc = false, out = '';
         for (let i = 0; i < str.length; i++) {
@@ -1267,9 +1279,18 @@ function parseScript(raw: string): SimScript | null {
             if (esc) { out += ch; esc = false; continue; }
             if (ch === '\\') { out += ch; esc = true; continue; }
             if (ch === '"') { inStr = !inStr; out += ch; continue; }
-            if (inStr && ch === '\n') { out += '\\n'; continue; }
-            if (inStr && ch === '\r') { out += '\\r'; continue; }
-            if (inStr && ch === '\t') { out += '\\t'; continue; }
+            if (inStr) {
+                if (ch === '\n') { out += '\\n'; continue; }
+                if (ch === '\r') { out += '\\r'; continue; }
+                if (ch === '\t') { out += '\\t'; continue; }
+                out += ch; continue;
+            }
+            // 字符串外：跳过 } 或 ] 前的尾随逗号
+            if (ch === ',') {
+                let j = i + 1;
+                while (j < str.length && /\s/.test(str[j])) j++;
+                if (str[j] === '}' || str[j] === ']') continue;
+            }
             out += ch;
         }
         return out;
