@@ -159,7 +159,7 @@ const PersonaSim: React.FC<Props> = ({ targetChar, onExit, openLifeLog, sim, onS
         if (phase === 'idle' && sim.status === 'ready') {
             setMode(sim.mode); setTheme(sim.theme);
             // 重播：脚本来自生活记录已存档的快照，别再 persist 一遍（否则生活记录里出现重复）
-            setScript(sim.script); setIdx(0); savedRef.current = !!sim.replay; setMemorySent(false); setPhase('play');
+            setScript(normalizeScript(sim.script)); setIdx(0); savedRef.current = !!sim.replay; setMemorySent(false); setPhase('play');
             onConsumed();
         }
     }, [sim, phase, onConsumed]);
@@ -1237,6 +1237,22 @@ kind 取值与字段：
 请严格贴合上面的【本场变奏】，并把【下猛料】那段吃透：beats 给足 40~64 个、独白密集、细节具体、数字行为反复、高潮拉长、结尾收束落地。**务必保证 JSON 完整闭合、结尾收好**——若篇幅吃紧，宁可砍掉几个中段 beat，也要留足收尾、把括号全部闭合，绝不允许写到一半被截断。直接输出 JSON 对象。`;
 }
 
+// 归一化 LLM 输出：模型偶尔会漏掉 app beat 里的嵌套数组（如 view:'chat' 却没有 chat.lines），
+// 渲染到 .map 时会整页崩（Safari 报「undefined is not an object」）。这里统一兜底成数组。
+function normalizeScript(s: SimScript): SimScript {
+    if (!Array.isArray(s.beats)) return s;
+    for (const b of s.beats) {
+        const a = b?.app;
+        if (!a) continue;
+        if (a.chat && !Array.isArray(a.chat.lines)) a.chat.lines = [];
+        if (a.search && !Array.isArray(a.search.queries)) a.search.queries = [];
+        if (a.notes && !Array.isArray(a.notes.items)) a.notes.items = [];
+        if (a.browser && !Array.isArray(a.browser.tabs)) a.browser.tabs = [];
+        if (a.compose && !Array.isArray(a.compose.drafts)) a.compose.drafts = [];
+    }
+    return s;
+}
+
 function parseScript(raw: string): SimScript | null {
     if (!raw) return null;
     let s = raw.replace(/```json/gi, '').replace(/```/g, '').trim();
@@ -1258,8 +1274,8 @@ function parseScript(raw: string): SimScript | null {
         }
         return out;
     };
-    try { return JSON.parse(s); } catch { }
-    try { return JSON.parse(repair(s)); } catch (e) { console.warn('persona parse failed', e); return null; }
+    try { return normalizeScript(JSON.parse(s)); } catch { }
+    try { return normalizeScript(JSON.parse(repair(s))); } catch (e) { console.warn('persona parse failed', e); return null; }
 }
 
 export default PersonaSim;
