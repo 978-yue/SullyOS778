@@ -1198,6 +1198,7 @@ const Settings: React.FC = () => {
                         </span>
                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-slate-400 flex-shrink-0"><path fillRule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" /></svg>
                     </button>
+                    <p className="text-[11px] text-slate-400 mt-1 pl-1">部分服务商（如微调接口）没有模型列表或不允许跨域，「刷新模型列表」可能失败——这时点上方直接手动填模型名 / 训练作业 ID 即可。</p>
                 </div>
                 
                 <button onClick={handleSaveApi} className="w-full py-3 rounded-2xl font-bold text-white shadow-lg shadow-primary/20 bg-primary active:scale-95 transition-all mt-2">
