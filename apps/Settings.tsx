@@ -428,24 +428,35 @@ const Settings: React.FC = () => {
     setStatusMsg('正在连接...');
     try {
         const baseUrl = localUrl.replace(/\/+$/, '');
+        // GET /models 不带请求体：别加 Content-Type，否则只会让 CORS 预检多一个非简单头。
         const response = await fetch(`${baseUrl}/models`, {
             method: 'GET',
-            headers: { 'Authorization': `Bearer ${localKey}`, 'Content-Type': 'application/json' }
+            headers: { 'Authorization': `Bearer ${localKey}` }
         });
         if (!response.ok) throw new Error(`Status ${response.status}`);
         const data = await safeResponseJson(response);
         // Support various API response formats
         const list = data.data || data.models || [];
-        if (Array.isArray(list)) {
+        if (Array.isArray(list) && list.length > 0) {
             const models = list.map((m: any) => m.id || m);
             setAvailableModels(models);
-            if (models.length > 0 && !models.includes(localModel)) setLocalModel(models[0]);
+            if (!models.includes(localModel)) setLocalModel(models[0]);
             setStatusMsg(`获取到 ${models.length} 个模型`);
             setShowModelModal(true); // Open selector immediately
-        } else { setStatusMsg('格式不兼容'); }
+        } else {
+            // 接口通了但没返回模型列表（部分服务商 /models 返回空）——直接进手动输入。
+            setStatusMsg('该服务商未返回模型列表，请手动填写');
+            setShowModelModal(true);
+        }
     } catch (error: any) {
-        console.error(error);
-        setStatusMsg('连接失败');
+        // 微调类服务商（如截图里的 Pioneer）model 传的是「训练作业 ID」，根本没有可列举的
+        // 模型目录，/models 经常不存在或不允许浏览器跨域 → fetch 直接抛 TypeError「Failed to
+        // fetch」。这不是崩溃，别用 console.error（会被全局拦截器记成吓人的 Application 错误），
+        // 给一句能照做的提示，并打开弹窗让用户手动填模型名 / 训练作业 ID。
+        const isNetworkError = error?.name === 'TypeError' || /failed to fetch|load failed/i.test(error?.message || '');
+        console.warn('[fetchModels] 拉取模型列表失败：', error?.message || error);
+        setStatusMsg(isNetworkError ? '无法获取列表（接口不存在或跨域），请手动填写' : `获取失败：${error?.message || '未知错误'}`);
+        setShowModelModal(true);
     } finally {
         setIsLoadingModels(false);
     }
