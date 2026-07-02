@@ -16,14 +16,15 @@ import { exportMcdLocal, importMcdLocal } from './mcdMcpClient';
 import { exportWorldHomeLocal, importWorldHomeLocal } from './worldHome/localBackup';
 
 const DB_NAME = 'AetherOS_Data';
-const DB_VERSION = 64; // Bumped: v64 ensure worlds / world_episodes stores exist（v63 漏建：已到 v63 的库不会再触发 upgrade，补一版重建）
+const DB_VERSION = 65; // Bumped: v65 新增 blob_assets（图片二进制 Blob 存储，壁纸/小屋等改存 Blob 省空间省内存，见 utils/blobRef.ts）
 
 const STORE_CHARACTERS = 'characters';
 const STORE_MESSAGES = 'messages';
 const STORE_EMOJIS = 'emojis';
 const STORE_EMOJI_CATEGORIES = 'emoji_categories'; 
 const STORE_THEMES = 'themes';
-const STORE_ASSETS = 'assets'; 
+const STORE_ASSETS = 'assets';
+const STORE_BLOB_ASSETS = 'blob_assets'; // 图片二进制 Blob 存储（key=生成 id，value={id, blob}）；壁纸/小屋等图片改存 Blob 而非 base64，省 ~33% 空间且不占 JS 堆。见 utils/blobRef.ts
 const STORE_SCHEDULED = 'scheduled_messages'; 
 const STORE_GALLERY = 'gallery';
 const STORE_USER = 'user_profile'; 
@@ -227,6 +228,7 @@ export const openDB = (): Promise<IDBDatabase> => {
 
       createStore(STORE_THEMES, { keyPath: 'id' });
       createStore(STORE_ASSETS, { keyPath: 'id' });
+      createStore(STORE_BLOB_ASSETS, { keyPath: 'id' }); // v65: 图片二进制 Blob 存储
       
       if (!db.objectStoreNames.contains(STORE_SCHEDULED)) {
         const schedStore = db.createObjectStore(STORE_SCHEDULED, { keyPath: 'id' });
@@ -1004,6 +1006,39 @@ export const DB = {
     const db = await openDB();
     const transaction = db.transaction(STORE_ASSETS, 'readwrite');
     transaction.objectStore(STORE_ASSETS).delete(id);
+  },
+
+  // ─── Blob 资源（图片二进制，见 utils/blobRef.ts）───────────────
+  // IndexedDB 原生支持存 Blob（结构化克隆），比 base64 省 ~33% 空间、不占 JS 堆，
+  // 读出后用 URL.createObjectURL 渲染即可。旧库（<v65）可能还没有此 store，读操作做空兜底。
+  getBlobAsset: async (id: string): Promise<Blob | null> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_BLOB_ASSETS)) return null;
+      return new Promise((resolve, reject) => {
+          const transaction = db.transaction(STORE_BLOB_ASSETS, 'readonly');
+          const store = transaction.objectStore(STORE_BLOB_ASSETS);
+          const request = store.get(id);
+          request.onsuccess = () => resolve((request.result?.blob as Blob) ?? null);
+          request.onerror = () => reject(request.error);
+      });
+  },
+
+  putBlobAsset: async (id: string, blob: Blob): Promise<void> => {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+          const transaction = db.transaction(STORE_BLOB_ASSETS, 'readwrite');
+          transaction.objectStore(STORE_BLOB_ASSETS).put({ id, blob });
+          transaction.oncomplete = () => resolve();
+          transaction.onerror = () => reject(transaction.error);
+          transaction.onabort = () => reject(transaction.error || new Error('putBlobAsset aborted'));
+      });
+  },
+
+  deleteBlobAsset: async (id: string): Promise<void> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_BLOB_ASSETS)) return;
+      const transaction = db.transaction(STORE_BLOB_ASSETS, 'readwrite');
+      transaction.objectStore(STORE_BLOB_ASSETS).delete(id);
   },
 
   getJournalStickers: async (): Promise<{name: string, url: string}[]> => {

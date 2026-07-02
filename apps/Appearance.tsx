@@ -3,7 +3,8 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { useOS, DEFAULT_WALLPAPER } from '../context/OSContext';
 import { OSTheme, DesktopDecoration, AppearancePreset, Toast } from '../types';
 import { INSTALLED_APPS, Icons } from '../constants';
-import { processImage } from '../utils/file';
+import { processImage, processImageToBlob } from '../utils/file';
+import { putImageBlob } from '../utils/blobRef';
 import { DB } from '../utils/db';
 import { isStatusBarHidden } from '../utils/iosStandalone';
 import { confirmExportSafety } from '../utils/exportGuard';
@@ -760,9 +761,10 @@ const Appearance: React.FC = () => {
   const handleWallpaperUpload = async (file: File) => {
       try {
           addToast('正在处理壁纸 (原画质)...', 'info');
-          // Use skipCompression to keep original quality
-          const dataUrl = await processImage(file, { skipCompression: true });
-          updateTheme({ wallpaper: dataUrl });
+          // 改存 Blob：原画质不重绘，二进制进 blob_assets，字段只存 blobref 令牌（省 ~33% 空间、不占 JS 堆）。
+          const blob = await processImageToBlob(file, { skipCompression: true });
+          const ref = await putImageBlob(blob);
+          updateTheme({ wallpaper: ref });
           addToast('壁纸更新成功', 'success');
       } catch (e: any) {
           addToast(e.message, 'error');

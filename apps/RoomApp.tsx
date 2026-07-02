@@ -6,7 +6,9 @@ import { RoomItem, CharacterProfile, RoomTodo, RoomNote, DailySchedule, AppID } 
 import ScheduleCard from '../components/schedule/ScheduleCard';
 import { ContextBuilder } from '../utils/context';
 import { injectMemoryPalace } from '../utils/memoryPalace/pipeline';
-import { processImage } from '../utils/file';
+import { processImageToBlob } from '../utils/file';
+import { putImageBlob, useBlobRefUrl, isBlobRef, migrateDataUrlToRef } from '../utils/blobRef';
+import TokenImg from '../components/os/TokenImg';
 import Modal from '../components/os/Modal';
 import { safeResponseJson } from '../utils/safeApi';
 import { Door, Sparkle, Image, GearSix, Camera, MoonStars } from '@phosphor-icons/react';
@@ -365,6 +367,14 @@ const RoomApp: React.FC = () => {
                 }
                 return a;
             });
+            // 惰性迁移：把旧的 base64 图片存量转成 Blob，字段换成 blobref 令牌（省空间、脱离 JS 堆）。
+            // 单个 JSON 记录、无并发写者，安全。转换失败原样保留，不丢图。
+            for (const a of migrated) {
+                if (typeof a.image === 'string' && a.image.startsWith('data:')) {
+                    const ref = await migrateDataUrlToRef(a.image);
+                    if (isBlobRef(ref)) { a.image = ref; needsSave = true; }
+                }
+            }
             if (needsSave && migrated.length > 0) {
                 await DB.saveAsset('room_custom_assets_list', JSON.stringify(migrated));
             }
@@ -869,24 +879,26 @@ ${!shouldGenerateTodo ? `(系统: 今日待办已存在，无需生成，请忽�
     const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, target: 'wall' | 'floor' | 'actor' | 'custom_item') => { 
         const file = e.target.files?.[0]; 
         if (file) { 
-            try { 
+            try {
                 // Force high quality for custom item uploads
                 const processOptions = target === 'custom_item' ? { quality: 1.0, maxWidth: 2048 } : undefined;
-                const base64 = await processImage(file, processOptions); 
-                
-                if (target === 'wall') handleWallChange(base64); 
-                if (target === 'floor') handleFloorChange(base64); 
-                if (target === 'actor') { 
-                    if (char) { 
-                        const newSprites = { ...(char.sprites || {}), 'chibi': base64 }; 
-                        updateCharacter(char.id, { sprites: newSprites }); 
-                        addToast('角色房间立绘已更新', 'success'); 
-                    } 
-                } 
-                if (target === 'custom_item') { 
-                    setCustomItemImage(base64); 
-                } 
-            } catch (err: any) { 
+                // 改存 Blob：压缩后二进制进 blob_assets，字段只存 blobref 令牌（省 ~33% 空间、不占 JS 堆）。
+                const blob = await processImageToBlob(file, processOptions);
+                const ref = await putImageBlob(blob);
+
+                if (target === 'wall') handleWallChange(ref);
+                if (target === 'floor') handleFloorChange(ref);
+                if (target === 'actor') {
+                    if (char) {
+                        const newSprites = { ...(char.sprites || {}), 'chibi': ref };
+                        updateCharacter(char.id, { sprites: newSprites });
+                        addToast('角色房间立绘已更新', 'success');
+                    }
+                }
+                if (target === 'custom_item') {
+                    setCustomItemImage(ref);
+                }
+            } catch (err: any) {
                 addToast(err.message, 'error'); 
             } 
         } 
@@ -1249,14 +1261,19 @@ ${!shouldGenerateTodo ? `(系统: 今日待办已存在，无需生成，请忽�
 
     // ROOM SCREEN
     // Use chibi sprite if available, else avatar. Fallback for Sully is injected via OSContext now.
-    const actorImage = char?.sprites?.['chibi'] || char?.avatar;
+    // chibi 立绘 / 墙 / 地板都可能是 blobref 令牌，先解析成可直接渲染的 url（objectURL / http / data）。
+    // hook 须无条件在顶层调用；char 为空时传 undefined，hook 原样返回 undefined，安全。
+    const actorImage = useBlobRefUrl(char?.sprites?.['chibi'] || char?.avatar);
+    const wallImg = useBlobRefUrl(char?.roomConfig?.wallImage);
+    const floorImg = useBlobRefUrl(char?.roomConfig?.floorImage);
     // PERF: Reduced from 3 drop-shadows to 1 simple shadow -- massive mobile GPU savings
     const stickerClass = "filter drop-shadow-[0_2px_4px_rgba(0,0,0,0.15)]";
-    
+
     // Background Style Construction (Logic 1: Legacy String vs New Config)
     const getBgStyle = (img: string | undefined, scale: number | undefined, repeat: boolean | undefined) => {
         if (!img) return '';
-        const isUrl = img.startsWith('http') || img.startsWith('data');
+        // blob: 是令牌解析出的 objectURL，也要按图片(url())处理，否则会被当成 CSS 渐变。
+        const isUrl = img.startsWith('http') || img.startsWith('data') || img.startsWith('blob:');
         const url = isUrl ? `url(${img})` : img; // If it's a CSS gradient, use it directly
         
         // If it's a gradient string (not URL), ignore scale params as they apply to background-size which works on gradients too, but repeat usually doesn't apply the same way.
@@ -1271,8 +1288,8 @@ ${!shouldGenerateTodo ? `(系统: 今日待办已存在，无需生成，请忽�
         return `${url} ${pos} / ${size} ${rep}`;
     };
 
-    const wallStyle = getBgStyle(char?.roomConfig?.wallImage, char?.roomConfig?.wallScale, char?.roomConfig?.wallRepeat) || WALLPAPER_PRESETS[0].value;
-    const floorStyle = getBgStyle(char?.roomConfig?.floorImage, char?.roomConfig?.floorScale, char?.roomConfig?.floorRepeat) || FLOOR_PRESETS[0].value;
+    const wallStyle = getBgStyle(wallImg, char?.roomConfig?.wallScale, char?.roomConfig?.wallRepeat) || WALLPAPER_PRESETS[0].value;
+    const floorStyle = getBgStyle(floorImg, char?.roomConfig?.floorScale, char?.roomConfig?.floorRepeat) || FLOOR_PRESETS[0].value;
 
     // Merge Asset Libraries for Modal
     const displayLibrary: Record<string, any[]> = {
@@ -1325,7 +1342,7 @@ ${!shouldGenerateTodo ? `(系统: 今日待办已存在，无需生成，请忽�
                                 willChange: isDragging ? 'left, top' : 'auto' // GPU layer only when needed
                             }}
                         >
-                            <img src={item.image} className="w-full h-auto object-contain pointer-events-none select-none" draggable={false} loading="lazy" />
+                            <TokenImg value={item.image} className="w-full h-auto object-contain pointer-events-none select-none" draggable={false} loading="lazy" />
                             {mode === 'edit' && selectedItemId === item.id && <div className="absolute -top-6 left-1/2 -translate-x-1/2 bg-blue-500 text-white text-[9px] px-2 py-0.5 rounded-full whitespace-nowrap">选中</div>}
                         </div>
                     );
@@ -1333,7 +1350,7 @@ ${!shouldGenerateTodo ? `(系统: 今日待办已存在，无需生成，请忽�
                 
                 {/* Character Actor - Z Index Boosted to simulate standing in front */}
                 <div onClick={(e) => { e.stopPropagation(); handlePokeActor(); }} className={`absolute transition-[left,top] duration-[1000ms] ease-in-out origin-bottom-center ${stickerClass} cursor-pointer active:scale-95 group`} style={{ left: `${actorState.x}%`, top: `${actorState.y}%`, width: '120px', transform: `translate(-50%, -100%) scale(${actorState.action === 'walk' ? 1.05 : (actorState.action === 'bounce' ? 1.1 : 1)})`, zIndex: Math.floor(actorState.y) + 20 }}>
-                    <img src={actorImage} className={`w-full h-full object-contain ${actorState.action === 'walk' ? 'animate-bounce' : ''}`} />
+                    <img src={actorImage} className={`w-full h-full object-contain ${actorState.action === 'walk' ? 'animate-bounce' : ''}`} alt="" />
                     {mode === 'edit' && <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-black/60 text-white text-[9px] px-2 py-1 rounded backdrop-blur-sm whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1"><Camera size={12} /> 换装</div>}
                     {/* Fixed: Wider bubble width */}
                     {aiBubble.visible && <div className="absolute bottom-[105%] left-1/2 -translate-x-1/2 bg-white px-4 py-3 rounded-[20px] rounded-bl-none shadow-lg border-2 border-black/5 min-w-[120px] max-w-[300px] animate-pop-in z-50"><p className="text-xs font-bold text-slate-700 leading-tight text-center break-words">{aiBubble.text}</p><button onClick={(e) => { e.stopPropagation(); setAiBubble({ ...aiBubble, visible: false }); }} className="absolute -top-2 -right-2 bg-slate-200 text-slate-500 rounded-full w-4 h-4 flex items-center justify-center text-[8px]">×</button></div>}
@@ -1524,7 +1541,7 @@ ${!shouldGenerateTodo ? `(系统: 今日待办已存在，无需生成，请忽�
                                                 {...handlers}
                                             >
                                                 <div className="w-14 h-14 bg-slate-50 rounded-xl flex items-center justify-center border border-slate-100 group-hover:border-blue-300 transition-colors overflow-hidden relative">
-                                                    <img src={asset.image} className="w-full h-full object-contain" />
+                                                    <TokenImg value={asset.image} className="w-full h-full object-contain" />
                                                     {isCustom && asset.visibility === 'character' && <div className="absolute top-0 right-0 w-3 h-3 bg-blue-400 rounded-bl-lg" title="角色专属"></div>}
                                                 </div>
                                                 <span className="text-[10px] text-slate-500 truncate w-full text-center">{asset.name}</span>
@@ -1545,7 +1562,7 @@ ${!shouldGenerateTodo ? `(系统: 今日待办已存在，无需生成，请忽�
                 {editingAsset && (
                     <div className="space-y-3">
                         <div className="flex gap-3 items-start">
-                            <img src={editImage} className="w-14 h-14 object-contain rounded-lg bg-slate-100 border shrink-0" />
+                            <TokenImg value={editImage} className="w-14 h-14 object-contain rounded-lg bg-slate-100 border shrink-0" />
                             <div className="flex-1 space-y-2">
                                 <div>
                                     <label className="text-[10px] font-bold text-slate-400 block mb-1">名称</label>
@@ -1553,7 +1570,9 @@ ${!shouldGenerateTodo ? `(系统: 今日待办已存在，无需生成，请忽�
                                 </div>
                                 <div>
                                     <label className="text-[10px] font-bold text-slate-400 block mb-1">图片 URL</label>
-                                    <input value={editImage} onChange={e => setEditImage(e.target.value)} placeholder="https://..." className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-blue-500" />
+                                    {/* 上传的图片以 blobref 令牌 / data: 存，URL 框里不显示这坨（避免误当成坏链接）；
+                                        留空即保留原图，填入新 URL 才覆盖。 */}
+                                    <input value={(isBlobRef(editImage) || editImage.startsWith('data:')) ? '' : editImage} onChange={e => setEditImage(e.target.value)} placeholder={(isBlobRef(editImage) || editImage.startsWith('data:')) ? '已上传图片（留空保留）' : 'https://...'} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-blue-500" />
                                 </div>
                             </div>
                         </div>
@@ -1592,7 +1611,7 @@ ${!shouldGenerateTodo ? `(系统: 今日待办已存在，无需生成，请忽�
                 <div className="space-y-4">
                     <div className="flex gap-4">
                         <div onClick={() => customItemInputRef.current?.click()} className="aspect-square w-24 bg-slate-100 rounded-2xl border-2 border-dashed border-slate-300 flex items-center justify-center cursor-pointer hover:border-purple-400 relative overflow-hidden shrink-0">
-                            {customItemImage ? <img src={customItemImage} className="w-full h-full object-contain" /> : <span className="text-slate-400 text-xs">+ 上传</span>}
+                            {customItemImage ? <TokenImg value={customItemImage} className="w-full h-full object-contain" /> : <span className="text-slate-400 text-xs">+ 上传</span>}
                             <input type="file" ref={customItemInputRef} className="hidden" accept="image/*" onChange={(e) => handleImageUpload(e, 'custom_item')} />
                         </div>
                         <div className="flex-1 space-y-2">
