@@ -13,6 +13,7 @@ import { getRoomLabel } from '../utils/memoryPalace/types';
 import { XhsMcpClient, extractNotesFromMcpData, normalizeNote } from '../utils/xhsMcpClient';
 import { extractWebpageContent, detectFirstUrl, isXhsUrl, expandShortUrl } from '../utils/webpageExtractor';
 import { isDevDebugAvailable } from '../utils/devDebug';
+import { resolveLifeRecordCard } from '../utils/lifeRecords';
 import { isMcdConfigured } from '../utils/mcdMcpClient';
 import { isMcdActivatedInMessages, MCD_ACTIVATE_TRIGGER, MCD_DEACTIVATE_TRIGGER } from '../utils/mcdToolBridge';
 import { isLuckinConfigured } from '../utils/luckinMcpClient';
@@ -1063,6 +1064,22 @@ const Chat: React.FC = () => {
         });
         await reloadMessages(visibleCountRef.current);
     }, [char, reloadMessages]);
+
+    // 用户点「生活记录」代记卡选择确认 / 否决：
+    // 否决 → 记录标记 rejected（不再计入注入摘要）+ 回滚银行流水（expense）+
+    // 给代记角色挂一条一次性反馈，下一轮 system prompt 会告诉角色它弄错了。
+    const handleResolveLifeRecord = useCallback(async (msg: Message, action: 'confirmed' | 'rejected') => {
+        if (!char) return;
+        // 只处理仍待复核的卡片，避免重复点击。
+        if (msg.metadata?.reviewStatus && msg.metadata.reviewStatus !== 'active') return;
+        try {
+            await resolveLifeRecordCard(msg, action);
+            addToast(action === 'confirmed' ? '已确认记录' : '已否决，记录撤销', action === 'confirmed' ? 'success' : 'info');
+        } catch (e) {
+            console.error('[LifeRecord] resolve failed:', e);
+        }
+        await reloadMessages(visibleCountRef.current);
+    }, [char, reloadMessages, addToast]);
 
     // 顶栏 ⚡ 手动触发。instant 模式下给"上一条 assistant 之后的所有 user 消息"打上"准备中"
     // 三个点（从写入 DB 到 SSE POST 入队之间），由 onInstantPosted 清除 ——
@@ -2915,6 +2932,7 @@ const Chat: React.FC = () => {
                             onMcdSendCart={handleMcdSendCart}
                             onMcdCandidate={handleMcdCandidate}
                             onResolveTransfer={handleResolveTransfer}
+                            onResolveLifeRecord={handleResolveLifeRecord}
                             thinkingChainOptions={thinkingChainOptions}
                         />
                         </div>

@@ -2041,6 +2041,16 @@ export interface CharacterProfile {
   // 关掉后见面场景不再注入时间，让剧情脱离现实时间线。独立开关。
   dateTimeAwarenessEnabled?: boolean;
 
+  // ─── 生活记录注入（档案 App「生活记录」→ 聊天提示词，per-character）───
+  // 总开关：默认关（opt-in）。开启后才注入「用户生活记录」section（潜意识背景约束 +
+  // 各模块今日摘要 + [[LIFE:...]] 代记指令说明）。关闭时连指令说明都不给角色看。
+  lifeRecordEnabled?: boolean;
+  // 小开关：默认开（!== false 即开），受总开关统辖；分别控制对应模块的数据摘要与代记指令。
+  lifeRecordPeriodEnabled?: boolean;    // 生理期
+  lifeRecordMedEnabled?: boolean;       // 药盒
+  lifeRecordExpenseEnabled?: boolean;   // 记账（打通银行 bank_transactions）
+  lifeRecordExerciseEnabled?: boolean;  // 锻炼
+
   // Chat & Date voice TTS settings
   chatVoiceEnabled?: boolean;
   chatVoiceLang?: string;
@@ -2512,6 +2522,61 @@ export interface TrackerEntry {
     updatedAt: number;
 }
 
+// ─── 生活记录（档案 App「生活记录」：生理期 / 药盒 / 记账 / 锻炼）───
+// 注意：内部标识用 LifeRecord，避开 PersonaSim 已占用的「生活记录 simLogs」概念。
+// 记账模块不独立存储——直接读写 BankApp 的 bank_transactions；角色代记的支出
+// 会额外落一条 module='expense' 的 LifeRecord（带 bankTxId）以支撑卡片确认/否决回滚。
+
+export type LifeRecordModule = 'period' | 'med' | 'expense' | 'exercise';
+
+export interface LifeRecord {
+    id: string;
+    module: LifeRecordModule;
+    /** period: 'start' | 'end'；med: 'taken'；expense: 'expense'；exercise: 'session' */
+    kind: string;
+    date: string;              // YYYY-MM-DD（事件归属日）
+    timestamp: number;
+    /**
+     * med:      { name, planId?, time? }
+     * expense:  { amount, note }（真实流水在 bank_transactions，此处仅镜像展示用）
+     * exercise: { activity, duration?, note? }
+     * period:   {}
+     */
+    payload: Record<string, any>;
+    /** 'user' = 用户在档案 App 手动记录；否则为代记角色的 charId */
+    recordedBy: string;
+    recordedByName?: string;
+    /**
+     * 卡片复核状态（仅角色代记的记录有意义；用户手记直接 'confirmed'）：
+     * active = 默认生效（用户未点卡片）；confirmed = 用户点了确认；
+     * rejected = 用户否决，不再计入注入摘要，且欠该角色一条反馈。
+     */
+    reviewStatus: 'active' | 'confirmed' | 'rejected';
+    /** 否决后待注入给代记角色的一次性反馈标记，注入后清除 */
+    pendingFeedback?: boolean;
+    /** expense 专用：对应 bank_transactions 里的流水 id（否决时回滚删除） */
+    bankTxId?: string;
+    note?: string;
+}
+
+/** 药盒「计划」：每天几点吃什么药（每日打卡产生 module='med' 的 LifeRecord） */
+export interface MedPlan {
+    id: string;
+    name: string;              // 药名
+    time: string;              // HH:MM
+    dosage?: string;           // 剂量（"1粒" / "5mg"）
+    note?: string;
+    enabled: boolean;
+    createdAt: number;
+}
+
+/** 生活记录全局设置（单例 id='main'） */
+export interface LifeRecordSettings {
+    id: string;                // 'main'
+    cycleLength?: number;      // 平均周期天数，默认 28
+    periodLength?: number;     // 平均经期天数，默认 5
+}
+
 export interface HandbookEntry {
     id: string;               // = date 'YYYY-MM-DD'
     date: string;
@@ -2702,7 +2767,7 @@ export interface GameSession {
     lastPlayedAt: number;
 }
 
-export type MessageType = 'text' | 'image' | 'emoji' | 'interaction' | 'transfer' | 'system' | 'social_card' | 'chat_forward' | 'xhs_card' | 'score_card' | 'music_card' | 'mcd_card' | 'luckin_card' | 'html_card' | 'news_card' | 'vr_card' | 'trpg_card' | 'world_card' | 'sim_card' | 'phone_card' | 'webpage_card' | 'theater_card';
+export type MessageType = 'text' | 'image' | 'emoji' | 'interaction' | 'transfer' | 'system' | 'social_card' | 'chat_forward' | 'xhs_card' | 'score_card' | 'music_card' | 'mcd_card' | 'luckin_card' | 'html_card' | 'news_card' | 'vr_card' | 'trpg_card' | 'world_card' | 'sim_card' | 'phone_card' | 'webpage_card' | 'theater_card' | 'life_card';
 
 export interface Message {
     id: number;
@@ -2856,6 +2921,11 @@ export interface FullBackupData {
     // 手账 Tracker（健康/生活打卡引擎）
     trackers?: Tracker[];
     trackerEntries?: TrackerEntry[];
+
+    // 生活记录（档案 App：生理期 / 药盒 / 锻炼；记账走 bankTransactions）
+    lifeRecords?: LifeRecord[];
+    medPlans?: MedPlan[];
+    lifeRecordSettings?: LifeRecordSettings[];
 
     // Memory Palace 批次处理元数据
     memoryBatches?: any[];

@@ -1163,6 +1163,53 @@ ${isInitialGeneration ? `
                                </div>
                            </div>
 
+                           {/* 生活记录注入：总开关 + 4 个模块小开关（数据在档案 App「生活记录」里维护） */}
+                           <div className="bg-white rounded-3xl p-4 shadow-sm border border-slate-100 space-y-4">
+                               <div>
+                                   <label className="text-[10px] font-bold text-rose-500 uppercase tracking-widest block">生活记录注入</label>
+                                   <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">把你在「档案 → 生活记录」里的生理期 / 药盒 / 记账 / 锻炼作为潜意识背景注入给该角色；你明确说出相关事实时，ta 还能帮你顺手记一笔（聊天里会出卡片，可确认 / 否决）。</p>
+                               </div>
+
+                               {/* 总开关 */}
+                               <div className="border-t border-slate-100 pt-3">
+                                   <div className="flex items-center justify-between gap-3">
+                                       <div className="min-w-0">
+                                           <p className="text-xs font-bold text-slate-700">总开关</p>
+                                           <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">默认关。关闭时不注入任何生活记录内容，连代记指令的用法都不会教给角色。</p>
+                                       </div>
+                                       <button
+                                           onClick={() => handleChange('lifeRecordEnabled', !formData.lifeRecordEnabled)}
+                                           className={`w-12 h-7 rounded-full transition-colors relative shrink-0 ${formData.lifeRecordEnabled ? 'bg-primary' : 'bg-slate-200'}`}
+                                       >
+                                           <div className={`absolute top-0.5 w-6 h-6 bg-white rounded-full shadow-md transition-transform ${formData.lifeRecordEnabled ? 'translate-x-5' : 'translate-x-0.5'}`}></div>
+                                       </button>
+                                   </div>
+                               </div>
+
+                               {/* 模块小开关（总开关关闭时整体置灰） */}
+                               <div className={`border-t border-slate-100 pt-3 space-y-3 ${formData.lifeRecordEnabled ? '' : 'opacity-40 pointer-events-none'}`}>
+                                   {([
+                                       ['lifeRecordPeriodEnabled', '生理期', '经期状态 / 周期预测 + 代记「来了 / 结束了」'],
+                                       ['lifeRecordMedEnabled', '药盒', '今日用药计划与打卡情况 + 代记「吃了 xx 药」'],
+                                       ['lifeRecordExpenseEnabled', '记账', '今日支出（与银行 App 打通）+ 代记「花了 xx 钱」'],
+                                       ['lifeRecordExerciseEnabled', '锻炼', '今日 / 本周锻炼情况 + 代记「做了 xx 运动」'],
+                                   ] as const).map(([field, label, desc]) => (
+                                       <div key={field} className="flex items-center justify-between gap-3">
+                                           <div className="min-w-0">
+                                               <p className="text-xs font-bold text-slate-700">{label}</p>
+                                               <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">{desc}</p>
+                                           </div>
+                                           <button
+                                               onClick={() => handleChange(field, formData[field] === false)}
+                                               className={`w-12 h-7 rounded-full transition-colors relative shrink-0 ${formData[field] !== false ? 'bg-primary' : 'bg-slate-200'}`}
+                                           >
+                                               <div className={`absolute top-0.5 w-6 h-6 bg-white rounded-full shadow-md transition-transform ${formData[field] !== false ? 'translate-x-5' : 'translate-x-0.5'}`}></div>
+                                           </button>
+                                       </div>
+                                   ))}
+                               </div>
+                           </div>
+
                            <div className="bg-white rounded-3xl p-4 shadow-sm border border-slate-100 space-y-3">
                                <div className="flex items-center justify-between">
                                    <label className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest flex items-center gap-1"><SpeakerHigh size={12} /> MiniMax 音色设定</label>

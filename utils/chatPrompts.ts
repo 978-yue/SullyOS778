@@ -13,6 +13,7 @@ import { VOICE_ACTING_GUIDE } from './minimaxTts';
 import { FISH_VOICE_ACTING_GUIDE } from './fishAudioTts';
 import { getTtsProvider, getVoicePromptOverride } from './ttsProvider';
 import { resolveCharTimeZone, nowInTimeZone } from './timezone';
+import { buildLifeRecordInjection } from './lifeRecords';
 
 // 语音格式指导按当前 TTS 服务商二选一：用 MiniMax 才注入 MiniMax 那套（含 <#秒#> 停顿标记），
 // 用鱼声则注入鱼声版（去掉 MiniMax 专属标记，改用标点 / 省略号控制停顿）。
@@ -297,7 +298,14 @@ export const ChatPrompts = {
             }
         })();
 
-        const [realtimeText, schedule, groupContextText, notionDiaryText, feishuDiaryText, notionNotesText] =
+        // 7. 生活记录（档案 App）注入 — 总开关关闭时 buildLifeRecordInjection 直接返回 ''
+        const lifeRecordPromise: Promise<string> = buildLifeRecordInjection(char, userProfile.name)
+            .catch(e => {
+                console.error('Failed to inject life record context:', e);
+                return '';
+            });
+
+        const [realtimeText, schedule, groupContextText, notionDiaryText, feishuDiaryText, notionNotesText, lifeRecordText] =
             await Promise.all([
                 timed('realtime', realtimePromise),
                 timed('schedule', schedulePromise),
@@ -305,6 +313,7 @@ export const ChatPrompts = {
                 timed('notionDiary', notionDiaryPromise),
                 timed('feishuDiary', feishuDiaryPromise),
                 timed('notionNotes', notionNotesPromise),
+                timed('lifeRecord', lifeRecordPromise),
             ]);
 
         // ── 按原顺序拼接 ──
@@ -366,6 +375,7 @@ export const ChatPrompts = {
         baseSystemPrompt += notionDiaryText;
         baseSystemPrompt += feishuDiaryText;
         baseSystemPrompt += notionNotesText;
+        baseSystemPrompt += lifeRecordText;
 
         // 彼方常驻设定：仅对启用了「彼方」的角色注入。让角色在聊天里始终知道彼方是什么，
         // 不再依赖累积的 vr_card 动态 / 记忆总结（那些会被压缩、丢掉"彼方=VR游戏"的框定，

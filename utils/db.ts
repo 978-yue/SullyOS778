@@ -7,6 +7,7 @@ import {
     GalleryImage, FullBackupData, GroupProfile, SocialPost, StudyCourse, GameSession, Worldbook, NovelBook, Emoji, EmojiCategory,
     BankTransaction, SavingsGoal, BankFullState, DollhouseState, XhsStockImage, XhsActivityRecord, SongSheet, QuizSession, GuidebookSession,
     LifeSimState, HandbookEntry, Tracker, TrackerEntry, HotNewsSnapshot,
+    LifeRecord, MedPlan, LifeRecordSettings,
     VRWorldNovel, VRNovelAnnotation, CustomCreatorPart, VRMusicRoomState, VRGuestbookState, VRScript, VRStagedPlay, VRLetter,
     WorldProfile, WorldEpisode
 } from '../types';
@@ -16,7 +17,7 @@ import { exportMcdLocal, importMcdLocal } from './mcdMcpClient';
 import { exportWorldHomeLocal, importWorldHomeLocal } from './worldHome/localBackup';
 
 const DB_NAME = 'AetherOS_Data';
-const DB_VERSION = 64; // Bumped: v64 ensure worlds / world_episodes stores exist（v63 漏建：已到 v63 的库不会再触发 upgrade，补一版重建）
+const DB_VERSION = 65; // Bumped: v65 生活记录（档案 App）life_records / med_plans / life_record_settings
 
 const STORE_CHARACTERS = 'characters';
 const STORE_MESSAGES = 'messages';
@@ -65,6 +66,9 @@ const STORE_VR_SETTINGS = 'vr_settings';          // 彼方设置单例：独立
 const STORE_API_CALL_LOG = 'api_call_log';        // 全局 API 调用记录单例（id='log'，保留近 5 天）
 const STORE_WORLDS = 'worlds';                    // 家园·世界定义（成员/NPC/居住/关系/模式）
 const STORE_WORLD_EPISODES = 'world_episodes';    // 家园·演绎历史（每轮一条，index worldId）
+const STORE_LIFE_RECORDS = 'life_records';        // 生活记录：生理期/药盒打卡/锻炼（记账走 bank_transactions）
+const STORE_MED_PLANS = 'med_plans';              // 药盒计划（每天几点吃什么药）
+const STORE_LIFE_SETTINGS = 'life_record_settings'; // 生活记录设置单例（id='main'：周期长度等）
 
 // API 调用记录：保留近 5 天，超期丢弃；再加一个硬上限防止异常情况撑爆
 const API_CALL_LOG_MAX_AGE_MS = 5 * 24 * 60 * 60 * 1000;
@@ -314,6 +318,15 @@ export const openDB = (): Promise<IDBDatabase> => {
           teStore.createIndex('trackerId', 'trackerId', { unique: false });
           teStore.createIndex('date', 'date', { unique: false });
       }
+
+      // v65: 生活记录（档案 App）
+      if (!db.objectStoreNames.contains(STORE_LIFE_RECORDS)) {
+          const lrStore = db.createObjectStore(STORE_LIFE_RECORDS, { keyPath: 'id' });
+          lrStore.createIndex('date', 'date', { unique: false });
+          lrStore.createIndex('module', 'module', { unique: false });
+      }
+      createStore(STORE_MED_PLANS, { keyPath: 'id' });
+      createStore(STORE_LIFE_SETTINGS, { keyPath: 'id' });
 
       createStore(STORE_HOTNEWS, { keyPath: 'id' });
 
@@ -1537,6 +1550,81 @@ export const DB = {
       tx.objectStore(STORE_TRACKER_ENTRIES).delete(id);
   },
 
+  // ─── 生活记录（档案 App：生理期 / 药盒 / 锻炼；记账走 bank_transactions） ───
+  getAllLifeRecords: async (): Promise<LifeRecord[]> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_LIFE_RECORDS)) return [];
+      return new Promise((resolve, reject) => {
+          const tx = db.transaction(STORE_LIFE_RECORDS, 'readonly');
+          const req = tx.objectStore(STORE_LIFE_RECORDS).getAll();
+          req.onsuccess = () => resolve(req.result || []);
+          req.onerror = () => reject(req.error);
+      });
+  },
+
+  getLifeRecordById: async (id: string): Promise<LifeRecord | null> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_LIFE_RECORDS)) return null;
+      return new Promise((resolve, reject) => {
+          const tx = db.transaction(STORE_LIFE_RECORDS, 'readonly');
+          const req = tx.objectStore(STORE_LIFE_RECORDS).get(id);
+          req.onsuccess = () => resolve(req.result || null);
+          req.onerror = () => reject(req.error);
+      });
+  },
+
+  saveLifeRecord: async (record: LifeRecord): Promise<void> => {
+      const db = await openDB();
+      const tx = db.transaction(STORE_LIFE_RECORDS, 'readwrite');
+      tx.objectStore(STORE_LIFE_RECORDS).put(record);
+  },
+
+  deleteLifeRecord: async (id: string): Promise<void> => {
+      const db = await openDB();
+      const tx = db.transaction(STORE_LIFE_RECORDS, 'readwrite');
+      tx.objectStore(STORE_LIFE_RECORDS).delete(id);
+  },
+
+  getAllMedPlans: async (): Promise<MedPlan[]> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_MED_PLANS)) return [];
+      return new Promise((resolve, reject) => {
+          const tx = db.transaction(STORE_MED_PLANS, 'readonly');
+          const req = tx.objectStore(STORE_MED_PLANS).getAll();
+          req.onsuccess = () => resolve(req.result || []);
+          req.onerror = () => reject(req.error);
+      });
+  },
+
+  saveMedPlan: async (plan: MedPlan): Promise<void> => {
+      const db = await openDB();
+      const tx = db.transaction(STORE_MED_PLANS, 'readwrite');
+      tx.objectStore(STORE_MED_PLANS).put(plan);
+  },
+
+  deleteMedPlan: async (id: string): Promise<void> => {
+      const db = await openDB();
+      const tx = db.transaction(STORE_MED_PLANS, 'readwrite');
+      tx.objectStore(STORE_MED_PLANS).delete(id);
+  },
+
+  getLifeRecordSettings: async (): Promise<LifeRecordSettings | null> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_LIFE_SETTINGS)) return null;
+      return new Promise((resolve, reject) => {
+          const tx = db.transaction(STORE_LIFE_SETTINGS, 'readonly');
+          const req = tx.objectStore(STORE_LIFE_SETTINGS).get('main');
+          req.onsuccess = () => resolve(req.result || null);
+          req.onerror = () => reject(req.error);
+      });
+  },
+
+  saveLifeRecordSettings: async (settings: LifeRecordSettings): Promise<void> => {
+      const db = await openDB();
+      const tx = db.transaction(STORE_LIFE_SETTINGS, 'readwrite');
+      tx.objectStore(STORE_LIFE_SETTINGS).put({ ...settings, id: 'main' });
+  },
+
   getAllCourses: async (): Promise<StudyCourse[]> => {
       const db = await openDB();
       if (!db.objectStoreNames.contains(STORE_COURSES)) return [];
@@ -2296,7 +2384,7 @@ export const DB = {
           });
       };
 
-      const [characters, messages, themes, emojis, emojiCategories, assets, galleryImages, userProfiles, diaries, tasks, anniversaries, roomTodos, roomNotes, groups, journalStickers, socialPosts, courses, games, worldbooks, novels, bankTx, bankData, xhsActivities, xhsStockImages, songs, quizzes, guidebookSessions, scheduledMessages, lifeSimStates, handbooks, trackers, trackerEntries, hotNewsSnapshots, vrNovels, vrAnnotations, customCreatorParts, vrMusic, vrGuestbook, vrScripts, vrStagedPlays, vrPresets, vrLetters, vrSettings, worlds, worldEpisodes] = await Promise.all([
+      const [characters, messages, themes, emojis, emojiCategories, assets, galleryImages, userProfiles, diaries, tasks, anniversaries, roomTodos, roomNotes, groups, journalStickers, socialPosts, courses, games, worldbooks, novels, bankTx, bankData, xhsActivities, xhsStockImages, songs, quizzes, guidebookSessions, scheduledMessages, lifeSimStates, handbooks, trackers, trackerEntries, hotNewsSnapshots, vrNovels, vrAnnotations, customCreatorParts, vrMusic, vrGuestbook, vrScripts, vrStagedPlays, vrPresets, vrLetters, vrSettings, worlds, worldEpisodes, lifeRecords, medPlans, lifeRecordSettings] = await Promise.all([
           getAllFromStore(STORE_CHARACTERS),
           getAllFromStore(STORE_MESSAGES),
           getAllFromStore(STORE_THEMES),
@@ -2342,6 +2430,9 @@ export const DB = {
           getAllFromStore(STORE_VR_SETTINGS),
           getAllFromStore(STORE_WORLDS),
           getAllFromStore(STORE_WORLD_EPISODES),
+          getAllFromStore(STORE_LIFE_RECORDS),
+          getAllFromStore(STORE_MED_PLANS),
+          getAllFromStore(STORE_LIFE_SETTINGS),
       ]);
 
       const userProfile = userProfiles.length > 0 ? {
@@ -2368,6 +2459,9 @@ export const DB = {
           handbooks,
           trackers,
           trackerEntries,
+          lifeRecords,
+          medPlans,
+          lifeRecordSettings,
           hotNewsSnapshots,
           vrNovels,
           vrAnnotations,
@@ -2419,6 +2513,9 @@ export const DB = {
           STORE_HANDBOOK,
           STORE_TRACKERS,
           STORE_TRACKER_ENTRIES,
+          STORE_LIFE_RECORDS,
+          STORE_MED_PLANS,
+          STORE_LIFE_SETTINGS,
           STORE_HOTNEWS,
           STORE_VR_NOVELS, STORE_VR_ANNOTATIONS, STORE_CC_PARTS, STORE_VR_MUSIC, STORE_VR_GUESTBOOK, STORE_VR_SCRIPTS, STORE_VR_PLAYS, STORE_VR_PRESETS, STORE_VR_LETTERS, STORE_VR_SETTINGS,
           STORE_WORLDS, STORE_WORLD_EPISODES,
@@ -2497,6 +2594,9 @@ export const DB = {
           data.handbooks !== undefined,
           data.trackers !== undefined,
           data.trackerEntries !== undefined,
+          data.lifeRecords !== undefined,
+          data.medPlans !== undefined,
+          data.lifeRecordSettings !== undefined,
           data.hotNewsSnapshots !== undefined,
           data.vrNovels !== undefined,
           data.vrAnnotations !== undefined,
@@ -2920,6 +3020,20 @@ export const DB = {
           await clearAndAdd(STORE_TRACKER_ENTRIES, data.trackerEntries, '打卡记录', false);
           data.trackerEntries = undefined as any;
       }, data.trackerEntries?.length || 0);
+
+      // 生活记录（档案 App：生理期/药盒/锻炼 + 药盒计划 + 设置）
+      await runSection('生活记录', data.lifeRecords !== undefined, async () => {
+          await clearAndAdd(STORE_LIFE_RECORDS, data.lifeRecords, '生活记录', false);
+          data.lifeRecords = undefined as any;
+      }, data.lifeRecords?.length || 0);
+      await runSection('药盒计划', data.medPlans !== undefined, async () => {
+          await clearAndAdd(STORE_MED_PLANS, data.medPlans, '药盒计划', false);
+          data.medPlans = undefined as any;
+      }, data.medPlans?.length || 0);
+      await runSection('生活记录设置', data.lifeRecordSettings !== undefined, async () => {
+          await clearAndAdd(STORE_LIFE_SETTINGS, data.lifeRecordSettings, '生活记录设置', false);
+          data.lifeRecordSettings = undefined as any;
+      }, data.lifeRecordSettings?.length || 0);
 
       // 热点快照（全角色共享缓存）
       await runSection('热点快照', data.hotNewsSnapshots !== undefined, async () => {

@@ -1,0 +1,156 @@
+/**
+ * 生活记录：生理期状态机 + [[LIFE:...]] 代记指令执行 + 卡片裁决回滚。
+ * IndexedDB 由 test-setup 的 fake-indexeddb 提供，走真实 DB 层。
+ */
+import { describe, it, expect } from 'vitest';
+import { computePeriodStatus, executeLifeDirectives, resolveLifeRecordCard, lifeToday } from './lifeRecords';
+import { DB } from './db';
+import { CharacterProfile, LifeRecord, Message } from '../types';
+
+const noToast = () => {};
+
+const mkPeriod = (kind: 'start' | 'end', date: string, extra?: Partial<LifeRecord>): LifeRecord => ({
+    id: `t-${kind}-${date}-${Math.random()}`,
+    module: 'period', kind, date,
+    timestamp: new Date(`${date}T08:00:00Z`).getTime(),
+    payload: {}, recordedBy: 'user', reviewStatus: 'confirmed', ...extra,
+});
+
+const mkChar = (overrides?: Partial<CharacterProfile>): CharacterProfile => ({
+    id: `char-${Math.random().toString(36).slice(2, 8)}`,
+    name: '江屿',
+    lifeRecordEnabled: true,
+    ...overrides,
+} as unknown as CharacterProfile);
+
+describe('computePeriodStatus 生理期状态机', () => {
+    it('只有 start：在经期中，天数 1-based', () => {
+        const st = computePeriodStatus([mkPeriod('start', '2026-07-01')], null, '2026-07-03');
+        expect(st.inPeriod).toBe(true);
+        expect(st.dayN).toBe(3);
+        expect(st.nextPredicted).toBe('2026-07-29'); // 默认 28 天周期
+    });
+
+    it('start + 之后的 end：不在经期', () => {
+        const st = computePeriodStatus(
+            [mkPeriod('start', '2026-07-01'), mkPeriod('end', '2026-07-05')],
+            null, '2026-07-06',
+        );
+        expect(st.inPeriod).toBe(false);
+        expect(st.lastEnd).toBe('2026-07-05');
+    });
+
+    it('被否决的 start 不算数', () => {
+        const st = computePeriodStatus(
+            [mkPeriod('start', '2026-07-01', { reviewStatus: 'rejected' })],
+            null, '2026-07-03',
+        );
+        expect(st.inPeriod).toBe(false);
+    });
+
+    it('忘记记结束：超过兜底天数后自动视为已结束', () => {
+        const st = computePeriodStatus([mkPeriod('start', '2026-06-01')], null, '2026-07-03');
+        expect(st.inPeriod).toBe(false);
+    });
+
+    it('自定义周期长度影响预测', () => {
+        const st = computePeriodStatus(
+            [mkPeriod('start', '2026-07-01')],
+            { id: 'main', cycleLength: 30 }, '2026-07-02',
+        );
+        expect(st.nextPredicted).toBe('2026-07-31');
+    });
+});
+
+describe('executeLifeDirectives 代记指令', () => {
+    it('MED 指令：写记录 + 落 life_card + 剥 tag', async () => {
+        const char = mkChar();
+        const out = await executeLifeDirectives('好，我帮你记下了 [[LIFE:MED|布洛芬]]', char, noToast);
+        expect(out).toBe('好，我帮你记下了');
+
+        const records = (await DB.getAllLifeRecords()).filter(r => r.recordedBy === char.id);
+        expect(records).toHaveLength(1);
+        expect(records[0].module).toBe('med');
+        expect(records[0].payload.name).toBe('布洛芬');
+        expect(records[0].reviewStatus).toBe('active');
+
+        const msgs = await DB.getMessagesByCharId(char.id, true);
+        const card = msgs.find((m: Message) => m.type === 'life_card');
+        expect(card).toBeTruthy();
+        expect(card!.metadata.recordId).toBe(records[0].id);
+    });
+
+    it('同日同药重复代记：不重复写库，卡片标 duplicate', async () => {
+        const char = mkChar();
+        await executeLifeDirectives('[[LIFE:MED|维生素C]]', char, noToast);
+        const char2 = mkChar({ name: '林深' });
+        await executeLifeDirectives('[[LIFE:MED|维生素C]]', char2, noToast);
+
+        const records = (await DB.getAllLifeRecords()).filter(r => r.payload.name === '维生素C');
+        expect(records).toHaveLength(1); // 只有第一次写进去
+        const msgs = await DB.getMessagesByCharId(char2.id, true);
+        const card = msgs.find((m: Message) => m.type === 'life_card');
+        expect(card!.metadata.duplicate).toBe(true);
+    });
+
+    it('总开关关闭：只剥 tag，不写任何东西', async () => {
+        const char = mkChar({ lifeRecordEnabled: false });
+        const out = await executeLifeDirectives('记好了[[LIFE:MED|阿莫西林]]', char, noToast);
+        expect(out).toBe('记好了');
+        const records = (await DB.getAllLifeRecords()).filter(r => r.recordedBy === char.id);
+        expect(records).toHaveLength(0);
+    });
+
+    it('模块小开关关闭：该模块指令被静默丢弃', async () => {
+        const char = mkChar({ lifeRecordExerciseEnabled: false });
+        const out = await executeLifeDirectives('[[LIFE:EXERCISE|跑步|30分钟]]', char, noToast);
+        expect(out).toBe('');
+        const records = (await DB.getAllLifeRecords()).filter(r => r.recordedBy === char.id);
+        expect(records).toHaveLength(0);
+    });
+
+    it('EXPENSE：同步写银行流水，否决时回滚删除', async () => {
+        const char = mkChar();
+        await executeLifeDirectives('[[LIFE:EXPENSE|38|打车]]', char, noToast);
+
+        const records = (await DB.getAllLifeRecords()).filter(r => r.recordedBy === char.id);
+        expect(records).toHaveLength(1);
+        const rec = records[0];
+        expect(rec.bankTxId).toBeTruthy();
+        let txs = await DB.getAllTransactions();
+        expect(txs.some(t => t.id === rec.bankTxId && t.amount === 38)).toBe(true);
+
+        // 否决：记录 rejected + 欠反馈 + 银行流水回滚
+        const msgs = await DB.getMessagesByCharId(char.id, true);
+        const card = msgs.find((m: Message) => m.type === 'life_card')!;
+        await resolveLifeRecordCard(card, 'rejected');
+
+        const after = await DB.getLifeRecordById(rec.id);
+        expect(after!.reviewStatus).toBe('rejected');
+        expect(after!.pendingFeedback).toBe(true);
+        txs = await DB.getAllTransactions();
+        expect(txs.some(t => t.id === rec.bankTxId)).toBe(false);
+    });
+
+    it('不在经期时收到 PERIOD_END：按"无需记录"处理，不写库', async () => {
+        const char = mkChar();
+        await executeLifeDirectives('[[LIFE:PERIOD_END]]', char, noToast);
+        const records = (await DB.getAllLifeRecords()).filter(r => r.recordedBy === char.id);
+        expect(records).toHaveLength(0);
+        const msgs = await DB.getMessagesByCharId(char.id, true);
+        const card = msgs.find((m: Message) => m.type === 'life_card');
+        expect(card!.metadata.duplicate).toBe(true);
+    });
+
+    it('PERIOD_START 后再次 START：判重；且状态机对今日生效', async () => {
+        const charA = mkChar({ name: 'A' });
+        await executeLifeDirectives('[[LIFE:PERIOD_START]]', charA, noToast);
+        const st = computePeriodStatus(await DB.getAllLifeRecords(), null, lifeToday());
+        expect(st.inPeriod).toBe(true);
+
+        const charB = mkChar({ name: 'B' });
+        await executeLifeDirectives('[[LIFE:PERIOD_START]]', charB, noToast);
+        const starts = (await DB.getAllLifeRecords()).filter(r => r.module === 'period' && r.kind === 'start');
+        expect(starts).toHaveLength(1);
+    });
+});
