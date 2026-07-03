@@ -35,6 +35,10 @@ export const isLifeModuleOn = (char: CharacterProfile, module: LifeRecordModule)
     }
 };
 
+/** 全局隐藏的模块集合（长按页签隐藏；优先级高于角色小开关，注入与代记一律跳过） */
+export const getHiddenLifeModules = (settings: LifeRecordSettings | null | undefined): Set<LifeRecordModule> =>
+    new Set(settings?.hiddenModules || []);
+
 // ─── 日期工具（与 BankApp 同口径：toISOString 取日期段） ───
 export const lifeToday = (): string => new Date().toISOString().split('T')[0];
 
@@ -184,35 +188,40 @@ export const buildLifeRecordInjection = async (char: CharacterProfile, userName:
     if (!isLifeRecordOn(char)) return '';
     const today = lifeToday();
 
-    const [records, plans, settings, txs] = await Promise.all([
+    // 全局隐藏优先级高于角色小开关：隐藏的模块数据、指令说明、医疗引导一律不注入
+    const settings = await DB.getLifeRecordSettings().catch(() => null);
+    const hidden = getHiddenLifeModules(settings);
+    const moduleActive = (m: LifeRecordModule) => isLifeModuleOn(char, m) && !hidden.has(m);
+    if (!(['period', 'med', 'expense', 'exercise'] as LifeRecordModule[]).some(moduleActive)) return '';
+
+    const [records, plans, txs] = await Promise.all([
         DB.getAllLifeRecords().catch(() => [] as LifeRecord[]),
-        isLifeModuleOn(char, 'med') ? DB.getAllMedPlans().catch(() => [] as MedPlan[]) : Promise.resolve([] as MedPlan[]),
-        DB.getLifeRecordSettings().catch(() => null),
-        isLifeModuleOn(char, 'expense') ? DB.getAllTransactions().catch(() => [] as BankTransaction[]) : Promise.resolve([] as BankTransaction[]),
+        moduleActive('med') ? DB.getAllMedPlans().catch(() => [] as MedPlan[]) : Promise.resolve([] as MedPlan[]),
+        moduleActive('expense') ? DB.getAllTransactions().catch(() => [] as BankTransaction[]) : Promise.resolve([] as BankTransaction[]),
     ]);
 
     let s = `\n### ${userName} 的生活记录（潜意识背景）\n`;
     s += `以下是 ${userName} 的近期生活状态。这些信息沉淀在你的潜意识里，是你理解 TA 的身体、情绪与状态的背景依据——**不要主动点破、不要逐条复述、不要表现得像在看报表**。只在自然的时机让关心自然流露（例如 TA 说累了，而你"隐约记得"TA 正处在生理期第 2 天）。\n\n`;
 
     const dataLines: string[] = [];
-    if (isLifeModuleOn(char, 'period')) dataLines.push(buildPeriodSummary(records, settings, today));
-    if (isLifeModuleOn(char, 'med')) dataLines.push(buildMedSummary(plans, records, today));
-    if (isLifeModuleOn(char, 'expense')) dataLines.push(buildExpenseSummary(txs, today));
-    if (isLifeModuleOn(char, 'exercise')) dataLines.push(buildExerciseSummary(records, today));
+    if (moduleActive('period')) dataLines.push(buildPeriodSummary(records, settings, today));
+    if (moduleActive('med')) dataLines.push(buildMedSummary(plans, records, today));
+    if (moduleActive('expense')) dataLines.push(buildExpenseSummary(txs, today));
+    if (moduleActive('exercise')) dataLines.push(buildExerciseSummary(records, today));
     s += `${dataLines.join('\n')}\n\n`;
 
-    if (isLifeModuleOn(char, 'period') || isLifeModuleOn(char, 'med')) {
+    if (moduleActive('period') || moduleActive('med')) {
         s += `${MEDICAL_TONE_GUIDE}\n\n`;
     }
 
     // 代记指令说明（按小开关裁剪；关掉的模块连用法都不教）
     const tools: string[] = [];
-    if (isLifeModuleOn(char, 'period')) {
+    if (moduleActive('period')) {
         tools.push(`- TA 明确说生理期来了 → \`[[LIFE:PERIOD_START]]\`；明确说结束了 → \`[[LIFE:PERIOD_END]]\``);
     }
-    if (isLifeModuleOn(char, 'med')) tools.push(`- TA 明确说吃了什么药 → \`[[LIFE:MED|药名]]\``);
-    if (isLifeModuleOn(char, 'expense')) tools.push(`- TA 明确说花了多少钱买什么 → \`[[LIFE:EXPENSE|金额|用途]]\`（金额是纯数字）`);
-    if (isLifeModuleOn(char, 'exercise')) tools.push(`- TA 明确说做了什么运动 → \`[[LIFE:EXERCISE|运动|时长]]\`（时长可省略）`);
+    if (moduleActive('med')) tools.push(`- TA 明确说吃了什么药 → \`[[LIFE:MED|药名]]\``);
+    if (moduleActive('expense')) tools.push(`- TA 明确说花了多少钱买什么 → \`[[LIFE:EXPENSE|金额|用途]]\`（金额是纯数字）`);
+    if (moduleActive('exercise')) tools.push(`- TA 明确说做了什么运动 → \`[[LIFE:EXERCISE|运动|时长]]\`（时长可省略）`);
     if (tools.length > 0) {
         s += `**代记工具**：只有当 ${userName} 在对话中**明确说出**以下事实时，才单独起一行输出对应指令、帮 TA 顺手记一笔（一次一条）：\n${tools.join('\n')}\n`;
         s += `TA 只是暗示、开玩笑、或在说过去 / 别人的事时，一律不要记录。记录成功后系统会插入一张卡片，TA 可以确认或否决；被否决说明你理解错了。平时不要把这些指令挂在嘴边，也不要替 TA 补记你只是猜测的事。\n`;
@@ -326,6 +335,8 @@ export const executeLifeDirectives = async (
     const today = lifeToday();
     let executed = 0;
     const MAX_PER_MESSAGE = 4; // 防 LLM 发疯连打十几条
+    // 全局隐藏的模块：即使角色开关全开也静默丢弃（用户长按隐藏 = 不想看到这类内容）
+    const hidden = getHiddenLifeModules(await DB.getLifeRecordSettings().catch(() => null));
 
     let m: RegExpMatchArray | null;
     while ((m = content.match(LIFE_TAG_RE)) !== null) {
@@ -335,7 +346,7 @@ export const executeLifeDirectives = async (
 
         const args = argStr ? argStr.split('|').slice(1).map(s => s.trim()) : [];
         const d = parseLifeDirective(verb, args);
-        if (!d || !isLifeModuleOn(char, d.module)) continue;
+        if (!d || !isLifeModuleOn(char, d.module) || hidden.has(d.module)) continue;
         executed++;
 
         try {

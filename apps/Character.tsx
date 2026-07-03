@@ -70,6 +70,13 @@ const Character: React.FC = () => {
   // 所有引用 char.avatar 的 <img> 都会拿到不完整字符串当相对路径请求根目录,
   // 导致打字时疯狂 GET / 和满屏破图. 失焦 / 回车才校验 + commit.
   const [avatarUrlDraft, setAvatarUrlDraft] = useState('');
+  // 生活记录被全局隐藏的模块（档案 App 长按页签隐藏）——对应的小开关行直接不显示
+  const [hiddenLifeModules, setHiddenLifeModules] = useState<string[]>([]);
+  useEffect(() => {
+      DB.getLifeRecordSettings()
+          .then(s => setHiddenLifeModules(s?.hiddenModules || []))
+          .catch(() => {});
+  }, []);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cardImportRef = useRef<HTMLInputElement>(null);
   
@@ -1189,11 +1196,11 @@ ${isInitialGeneration ? `
                                {/* 模块小开关（总开关关闭时整体置灰） */}
                                <div className={`border-t border-slate-100 pt-3 space-y-3 ${formData.lifeRecordEnabled ? '' : 'opacity-40 pointer-events-none'}`}>
                                    {([
-                                       ['lifeRecordPeriodEnabled', '生理期', '经期状态 / 周期预测 + 代记「来了 / 结束了」'],
-                                       ['lifeRecordMedEnabled', '药盒', '今日用药计划与打卡情况 + 代记「吃了 xx 药」'],
-                                       ['lifeRecordExpenseEnabled', '记账', '今日支出（与银行 App 打通）+ 代记「花了 xx 钱」'],
-                                       ['lifeRecordExerciseEnabled', '锻炼', '今日 / 本周锻炼情况 + 代记「做了 xx 运动」'],
-                                   ] as const).map(([field, label, desc]) => (
+                                       ['lifeRecordPeriodEnabled', 'period', '生理期', '经期状态 / 周期预测 + 代记「来了 / 结束了」'],
+                                       ['lifeRecordMedEnabled', 'med', '药盒', '今日用药计划与打卡情况 + 代记「吃了 xx 药」'],
+                                       ['lifeRecordExpenseEnabled', 'expense', '记账', '今日支出（与银行 App 打通）+ 代记「花了 xx 钱」'],
+                                       ['lifeRecordExerciseEnabled', 'exercise', '锻炼', '今日 / 本周锻炼情况 + 代记「做了 xx 运动」'],
+                                   ] as const).filter(([, moduleKey]) => !hiddenLifeModules.includes(moduleKey)).map(([field, , label, desc]) => (
                                        <div key={field} className="flex items-center justify-between gap-3">
                                            <div className="min-w-0">
                                                <p className="text-xs font-bold text-slate-700">{label}</p>

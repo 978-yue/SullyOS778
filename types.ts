@@ -2575,6 +2575,11 @@ export interface LifeRecordSettings {
     id: string;                // 'main'
     cycleLength?: number;      // 平均周期天数，默认 28
     periodLength?: number;     // 平均经期天数，默认 5
+    /**
+     * 全局隐藏的模块（长按模块页签 →「是否不需要这个功能？」）。
+     * 隐藏 = 前端不再显示 + 对所有角色断掉该模块注入与代记（优先级高于角色小开关）。
+     */
+    hiddenModules?: LifeRecordModule[];
 }
 
 export interface HandbookEntry {

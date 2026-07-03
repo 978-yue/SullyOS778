@@ -2,8 +2,8 @@
  * 生活记录：生理期状态机 + [[LIFE:...]] 代记指令执行 + 卡片裁决回滚。
  * IndexedDB 由 test-setup 的 fake-indexeddb 提供，走真实 DB 层。
  */
-import { describe, it, expect } from 'vitest';
-import { computePeriodStatus, executeLifeDirectives, resolveLifeRecordCard, lifeToday } from './lifeRecords';
+import { describe, it, expect, afterAll } from 'vitest';
+import { buildLifeRecordInjection, computePeriodStatus, executeLifeDirectives, resolveLifeRecordCard, lifeToday } from './lifeRecords';
 import { DB } from './db';
 import { CharacterProfile, LifeRecord, Message } from '../types';
 
@@ -152,5 +152,39 @@ describe('executeLifeDirectives 代记指令', () => {
         await executeLifeDirectives('[[LIFE:PERIOD_START]]', charB, noToast);
         const starts = (await DB.getAllLifeRecords()).filter(r => r.module === 'period' && r.kind === 'start');
         expect(starts).toHaveLength(1);
+    });
+});
+
+describe('全局隐藏模块（长按页签隐藏）', () => {
+    afterAll(async () => {
+        // 复原，避免污染同文件其他潜在用例
+        await DB.saveLifeRecordSettings({ id: 'main', hiddenModules: [] });
+    });
+
+    it('隐藏的模块：角色开关全开也不执行代记指令', async () => {
+        await DB.saveLifeRecordSettings({ id: 'main', hiddenModules: ['med'] });
+        const char = mkChar();
+        const out = await executeLifeDirectives('记下了[[LIFE:MED|感冒灵]]', char, noToast);
+        expect(out).toBe('记下了');
+        const records = (await DB.getAllLifeRecords()).filter(r => r.recordedBy === char.id);
+        expect(records).toHaveLength(0);
+    });
+
+    it('隐藏的模块：注入里不出现对应数据与指令说明', async () => {
+        await DB.saveLifeRecordSettings({ id: 'main', hiddenModules: ['med', 'exercise'] });
+        const char = mkChar();
+        const text = await buildLifeRecordInjection(char, '小鱼');
+        expect(text).toContain('生理期');
+        expect(text).not.toContain('今日用药计划');
+        expect(text).not.toContain('LIFE:MED');
+        expect(text).not.toContain('锻炼');
+        expect(text).not.toContain('LIFE:EXERCISE');
+    });
+
+    it('全部模块隐藏：整段注入为空', async () => {
+        await DB.saveLifeRecordSettings({ id: 'main', hiddenModules: ['period', 'med', 'expense', 'exercise'] });
+        const char = mkChar();
+        const text = await buildLifeRecordInjection(char, '小鱼');
+        expect(text).toBe('');
     });
 });
