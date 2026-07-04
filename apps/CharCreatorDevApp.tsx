@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useOS } from '../context/OSContext';
-import { ArrowLeft, UploadSimple, Trash, Wrench, Warning } from '@phosphor-icons/react';
+import { ArrowLeft, UploadSimple, Trash, Wrench, Warning, FileArrowUp, MoonStars } from '@phosphor-icons/react';
 import { DB } from '../utils/db';
 import type { CustomCreatorPart } from '../types';
+import type { ParsedPsdPart } from '../utils/psdCreatorImport';
 
 // 与捏人器 character_creator.html 里 PARTS 的 key 一一对应
 const CC_CATEGORIES: { key: string; label: string; multi?: boolean }[] = [
@@ -28,6 +29,11 @@ const CharCreatorDevApp: React.FC = () => {
     const [tintable, setTintable] = useState(false);
     const [src, setSrc] = useState('');
     const fileRef = useRef<HTMLInputElement>(null);
+    // PSD 整批导入
+    const psdRef = useRef<HTMLInputElement>(null);
+    const [psdParsing, setPsdParsing] = useState(false);
+    const [psdParts, setPsdParts] = useState<ParsedPsdPart[]>([]);
+    const [psdWarnings, setPsdWarnings] = useState<string[]>([]);
 
     const load = useCallback(async () => setParts(await DB.getCustomCreatorParts()), []);
     useEffect(() => { void load(); }, [load]);
@@ -63,6 +69,49 @@ const CharCreatorDevApp: React.FC = () => {
         addToast?.('已删除', 'success');
     };
 
+    const onPsdFile = async (f: File | undefined) => {
+        if (!f) return;
+        setPsdParsing(true);
+        setPsdParts([]); setPsdWarnings([]);
+        try {
+            const { parseCreatorPsd } = await import('../utils/psdCreatorImport');
+            const result = await parseCreatorPsd(await f.arrayBuffer());
+            setPsdParts(result.parts);
+            setPsdWarnings(result.warnings);
+            if (!result.parts.length) addToast?.('没解析出部件，检查图层组结构', 'error');
+        } catch (err) {
+            console.error('[CharCreatorDev] PSD 解析失败', err);
+            addToast?.('PSD 解析失败：' + String((err as Error)?.message || err), 'error');
+        } finally {
+            setPsdParsing(false);
+            if (psdRef.current) psdRef.current.value = '';
+        }
+    };
+
+    const updatePsdPart = (idx: number, patch: Partial<ParsedPsdPart>) => {
+        setPsdParts(prev => prev.map((p, i) => i === idx ? { ...p, ...patch } : p));
+    };
+
+    const savePsdParts = async () => {
+        const ready = psdParts.filter(p => p.categoryKey);
+        if (ready.length < psdParts.length) { addToast?.('还有部件没选类目', 'error'); return; }
+        for (const p of ready) {
+            const part: CustomCreatorPart = {
+                id: `${p.categoryKey}_cc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+                categoryKey: p.categoryKey!,
+                name: p.name || `自定义${labelOf(p.categoryKey!)}`,
+                src: p.src,
+                tintable: p.tintable,
+                shadowSrc: p.shadowSrc,
+                createdAt: Date.now(),
+            };
+            await DB.saveCustomCreatorPart(part);
+        }
+        setPsdParts([]); setPsdWarnings([]);
+        await load();
+        addToast?.(`已批量加入 ${ready.length} 个部件`, 'success');
+    };
+
     const grouped = useMemo(() => {
         const m: Record<string, CustomCreatorPart[]> = {};
         for (const p of parts) (m[p.categoryKey] ||= []).push(p);
@@ -86,6 +135,64 @@ const CharCreatorDevApp: React.FC = () => {
                         部件须是<b>透明背景 PNG</b>，且与捏人器画布<b>同尺寸、同锚点</b>（整幅图按位置叠层），否则会错位。
                         新部件会注入到「特别时光」和「彼方」的捏人器里——<b>下次打开捏人器</b>时生效。
                     </div>
+                </div>
+
+                {/* PSD 整批导入 */}
+                <div className="rounded-xl p-3 border border-white/10 space-y-2.5" style={{ background: 'rgba(255,255,255,0.04)' }}>
+                    <div className="text-[12px] font-bold text-white/90 flex items-center gap-1.5">
+                        <FileArrowUp size={14} weight="bold" className="text-amber-300" />
+                        PSD 整批导入
+                    </div>
+                    <div className="text-[10px] text-white/45 leading-relaxed">
+                        顶层<b>图层组 = 一个部件</b>，组名写「类目 名称」（如 <code>前发 云朵</code>）。
+                        组里的<b>正片叠底层</b>会自动识别为该部件投出去的阴影（转成黑色+alpha，换色不受影响）；
+                        名字加 <code>#色</code> / <code>#原色</code> 可强制换色开关，头发类目默认可换色。
+                    </div>
+                    <input ref={psdRef} type="file" accept=".psd" className="hidden" onChange={e => void onPsdFile(e.target.files?.[0])} />
+                    <button onClick={() => psdRef.current?.click()} disabled={psdParsing}
+                        className="w-full rounded-lg border border-dashed border-white/30 py-3 text-[11px] text-white/60 active:bg-white/5 disabled:opacity-50">
+                        {psdParsing ? '解析中…' : '选择 .psd 文件'}
+                    </button>
+                    {psdWarnings.map((w, i) => (
+                        <div key={i} className="text-[10px] text-amber-200/80 flex gap-1"><Warning size={12} className="shrink-0 mt-0.5" />{w}</div>
+                    ))}
+                    {psdParts.length > 0 && (
+                        <div className="space-y-2">
+                            {psdParts.map((p, idx) => (
+                                <div key={idx} className="rounded-lg border border-white/10 p-2 flex gap-2" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                                    <div className="w-16 h-16 shrink-0 relative rounded overflow-hidden"
+                                        style={{ background: 'repeating-conic-gradient(#ffffff10 0% 25%, transparent 0% 50%) 50% / 12px 12px' }}>
+                                        {p.shadowSrc && <img src={p.shadowSrc} alt="" className="absolute inset-0 w-full h-full object-contain" />}
+                                        <img src={p.src} alt={p.name} className="absolute inset-0 w-full h-full object-contain" />
+                                    </div>
+                                    <div className="flex-1 min-w-0 space-y-1">
+                                        <div className="flex gap-1.5">
+                                            <select value={p.categoryKey || ''} onChange={e => updatePsdPart(idx, { categoryKey: e.target.value || null })}
+                                                className={`text-[10.5px] rounded px-1.5 py-1 bg-white/10 outline-none ${p.categoryKey ? 'text-white' : 'text-red-300 border border-red-400/50'}`}>
+                                                <option value="">类目?</option>
+                                                {CC_CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+                                            </select>
+                                            <input value={p.name} onChange={e => updatePsdPart(idx, { name: e.target.value })}
+                                                className="flex-1 min-w-0 text-[10.5px] rounded px-1.5 py-1 bg-white/10 text-white outline-none" />
+                                        </div>
+                                        <div className="flex items-center gap-2.5 text-[10px] text-white/70">
+                                            <label className="flex items-center gap-1">
+                                                <input type="checkbox" checked={p.tintable} onChange={e => updatePsdPart(idx, { tintable: e.target.checked })} className="accent-amber-400 w-3 h-3" />
+                                                可换色
+                                            </label>
+                                            {p.shadowSrc && <span className="flex items-center gap-0.5 text-indigo-300"><MoonStars size={11} weight="fill" />投影</span>}
+                                            <button onClick={() => setPsdParts(prev => prev.filter((_, i) => i !== idx))} className="ml-auto text-red-300/80 active:text-red-300">移除</button>
+                                        </div>
+                                        {p.warnings.map((w, i) => <div key={i} className="text-[9.5px] text-amber-200/70">{w}</div>)}
+                                    </div>
+                                </div>
+                            ))}
+                            <button onClick={() => void savePsdParts()}
+                                className="w-full rounded-xl py-2.5 text-[13px] font-bold text-black" style={{ background: 'linear-gradient(135deg,#fbbf24,#f59e0b)' }}>
+                                全部加入捏人器（{psdParts.length}）
+                            </button>
+                        </div>
+                    )}
                 </div>
 
                 {/* 新增表单 */}
@@ -139,7 +246,7 @@ const CharCreatorDevApp: React.FC = () => {
                                         <div key={p.id} className="relative rounded-lg overflow-hidden border border-white/10 aspect-square flex items-center justify-center"
                                             style={{ background: 'repeating-conic-gradient(#ffffff10 0% 25%, transparent 0% 50%) 50% / 14px 14px' }}>
                                             <img src={p.src} alt={p.name} className="max-h-full max-w-full object-contain" />
-                                            <span className="absolute bottom-0 inset-x-0 bg-black/60 text-[8.5px] text-white/90 px-1 py-0.5 truncate">{p.name}{p.tintable ? ' ·色' : ''}</span>
+                                            <span className="absolute bottom-0 inset-x-0 bg-black/60 text-[8.5px] text-white/90 px-1 py-0.5 truncate">{p.name}{p.tintable ? ' ·色' : ''}{p.shadowSrc ? ' ·影' : ''}</span>
                                             <button onClick={() => remove(p.id)} className="absolute top-1 right-1 bg-red-500/90 rounded-full p-1 active:scale-90"><Trash size={11} weight="bold" /></button>
                                         </div>
                                     ))}

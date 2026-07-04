@@ -186,7 +186,7 @@ export const CreatorIframe: React.FC<CreatorIframeProps> = ({ mode, charName, pr
             try {
                 const parts = await DB.getCustomCreatorParts();
                 if (cancelled) return;
-                extraItemsRef.current = parts.map(p => ({ categoryKey: p.categoryKey, id: p.id, name: p.name, src: p.src, tintable: !!p.tintable }));
+                extraItemsRef.current = parts.map(p => ({ categoryKey: p.categoryKey, id: p.id, name: p.name, src: p.src, tintable: !!p.tintable, shadowSrc: p.shadowSrc }));
                 if (readyRef.current) postAddItems();
             } catch { /* 没有自定义部件时静默 */ }
         })();

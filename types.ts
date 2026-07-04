@@ -1502,6 +1502,12 @@ export interface CustomCreatorPart {
     src: string;
     /** 是否可被换色（对应 item.tintable） */
     tintable?: boolean;
+    /**
+     * 部件投到下方图层上的阴影（如刘海投在耳发/脸上的影子）。
+     * 透明 PNG data URL，同尺寸/同锚点；PSD 里的正片叠底层导入时已预转成
+     * 黑色+alpha 的普通图层，渲染时垫在本部件颜色层下方、不参与染色。
+     */
+    shadowSrc?: string;
     createdAt: number;
 }
 

@@ -694,7 +694,7 @@ function mergeExtraItems(items) {
     const cat = PARTS.find(p => p.key === it.categoryKey);
     if (!cat || !Array.isArray(cat.items)) return;
     if (cat.items.some(x => x.id === it.id)) return;
-    cat.items.push({ id: it.id, name: it.name || it.id, src: it.src, tintable: !!it.tintable });
+    cat.items.push({ id: it.id, name: it.name || it.id, src: it.src, tintable: !!it.tintable, shadow: it.shadowSrc || undefined });
     customPartIds.add(it.id);
     added++;
   });
@@ -1808,14 +1808,15 @@ function renderCharacter() {
         sub.style.cssText = "position:absolute;inset:0;";
         if (isFlipped(part.key, id)) sub.style.transform = "scaleX(-1)";
         layerEl.appendChild(sub);
+        const colorEl = mountShadowSub(sub, item);
         if (tintable) {
           /* 多选用每件独立颜色 */
           const tint = part.multi
             ? resolveTint(getItemTint(id))
             : resolveTint(getTintRef(part.key));
-          renderTintedLayer(sub, item.src, tint);
+          renderTintedLayer(colorEl, item.src, tint);
         } else {
-          sub.innerHTML = `<img src="${item.src}" alt="${item.name}" style="width:100%;height:100%;object-fit:contain;">`;
+          colorEl.innerHTML = `<img src="${item.src}" alt="${item.name}" style="width:100%;height:100%;object-fit:contain;">`;
         }
       });
       return;
@@ -1852,9 +1853,13 @@ function renderCharacter() {
           resolveTint(eyes.L), resolveTint(eyes.R));
       }
     } else if (!tintable) {
-      layerEl.innerHTML = `<img src="${item.src}" alt="${item.name}">`;
+      layerEl.innerHTML = "";
+      const colorEl = mountShadowSub(layerEl, item);
+      colorEl.innerHTML = `<img src="${item.src}" alt="${item.name}">`;
     } else {
-      renderTintedLayer(layerEl, item.src, resolveTint(getTintRef(part.key)));
+      layerEl.innerHTML = "";
+      const colorEl = mountShadowSub(layerEl, item);
+      renderTintedLayer(colorEl, item.src, resolveTint(getTintRef(part.key)));
     }
   });
   const eyesSel = state.selected.eyes;
@@ -1863,6 +1868,27 @@ function renderCharacter() {
     document.getElementById("layer-eyes-overlay").style.transform = "";
   }
   document.getElementById("emptyHint").style.display = anySelected ? "none" : "block";
+}
+
+/* ===== 部件自带投影层 =====
+   item.shadow 是这件部件"投到下方图层上的阴影"（如刘海投在耳发/脸上的影子）。
+   PSD 里的正片叠底层在导入时已预转成 黑色+alpha 的普通图层
+   （中性正片叠底 B×g 与 alpha=1-g 的纯黑覆盖在数学上等价），
+   所以这里只需把它作为普通 img 垫在颜色层"下面"、同一容器内：
+   - 不参与染色（换发色不影响影子）
+   - 部件自身不透明区域会盖住影子，影子只落在露出来的下层上
+   返回真正用来放颜色内容的子容器。 */
+function mountShadowSub(container, item) {
+  if (!item.shadow) return container;
+  const sh = document.createElement("img");
+  sh.src = item.shadow;
+  sh.alt = "";
+  sh.style.cssText = "position:absolute;inset:0;width:100%;height:100%;object-fit:contain;object-position:center;";
+  container.appendChild(sh);
+  const colorEl = document.createElement("div");
+  colorEl.style.cssText = "position:absolute;inset:0;";
+  container.appendChild(colorEl);
+  return colorEl;
 }
 
 /* ===== 单色染色（带轮廓保护） ===== */
