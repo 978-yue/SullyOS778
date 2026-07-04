@@ -2354,49 +2354,64 @@ var replaceSendEmoji = (t) => t.replace(/\[\[SEND_EMOJI:\s*(.+?)\]\]/g, "[\u8868
 var replaceEmojiReverseTag = (t) => t.replace(/\[(?:你|User|用户|System|[\w一-龥]+)\s*发送了表情包[:：]\s*(.*?)\]/g, "[\u8868\u60C5\uFF1A$1]");
 var replaceHtmlBlocks = (t) => t.replace(/\[html\][\s\S]*?\[\/html\]/gi, "[HTML \u5361\u7247]");
 var replaceTranslationForBanner = (t) => t.replace(/<翻译>\s*<原文>([\s\S]*?)<\/原文>\s*<译文>[\s\S]*?<\/译文>\s*<\/翻译>/g, "$1").replace(/<译文>[\s\S]*?<\/译文>/g, "").replace(/<\/?(?:翻译|原文)>/g, "");
-var replaceVoiceForBanner = (t) => t.replace(/<[语語]音[^>]*>([\s\S]*?)<\/\s*[语語]音\s*>/g, (_m, inner) => (inner || "").trim());
-function normalizeVoiceTags(t) {
-  if (!/[语語]音/.test(t)) return t;
-  let result = t;
-  result = result.replace(/＜\s*[/／]\s*([语語]音)\s*＞/g, "</$1>");
-  result = result.replace(/＜\s*([语語]音[^<>＜＞]*?)\s*＞/g, "<$1>");
-  result = result.replace(/<\s*[/／]\s*([语語]音)\s*>/g, "</$1>");
-  result = result.replace(/<([语語]音)\s*([^<>]*?)\s*>/g, (_m, tag, attrs) => {
-    if (!attrs) return `<${tag}>`;
-    const fixed = attrs.replace(/[“”＂]/g, '"').replace(/[‘’]/g, "'").replace(/＝/g, "=").trim();
-    return `<${tag} ${fixed}>`;
-  });
-  const tokenRe = /<\/?[语語]音[^>]*>/g;
+var replaceVoiceForBanner = (t) => t.replace(
+  /(?:<字幕>([\s\S]*?)<\/字幕>\s*)?<[语語]音[^>]*>([\s\S]*?)<\/\s*[语語]音\s*>(?:\s*<字幕>([\s\S]*?)<\/字幕>)?/g,
+  (_m, pre, inner, post) => (post || pre || inner || "").trim()
+).replace(/<字幕>([\s\S]*?)<\/字幕>/g, "$1").replace(/<\/?字幕>/g, "");
+function repairPairedTag(text, tokenRe, closeFormOf, closeBeforeTrailingSubtitle) {
   const kept = [];
   let cursor = 0;
   let openForm = null;
   let tok;
-  while ((tok = tokenRe.exec(result)) !== null) {
+  while ((tok = tokenRe.exec(text)) !== null) {
     const isClose = tok[0].startsWith("</");
     if (!isClose && /\/\s*>$/.test(tok[0])) {
-      kept.push(result.slice(cursor, tok.index));
+      kept.push(text.slice(cursor, tok.index));
       cursor = tok.index + tok[0].length;
       continue;
     }
     if (isClose) {
       if (openForm === null) {
-        kept.push(result.slice(cursor, tok.index));
+        kept.push(text.slice(cursor, tok.index));
         cursor = tok.index + tok[0].length;
       } else {
         openForm = null;
       }
     } else if (openForm !== null) {
-      kept.push(result.slice(cursor, tok.index));
+      kept.push(text.slice(cursor, tok.index));
       cursor = tok.index + tok[0].length;
     } else {
-      openForm = /語/.test(tok[0]) ? "\u8A9E\u97F3" : "\u8BED\u97F3";
+      openForm = closeFormOf(tok[0]);
     }
   }
-  kept.push(result.slice(cursor));
-  result = kept.join("");
+  kept.push(text.slice(cursor));
+  let result = kept.join("");
   if (openForm !== null) {
-    result = result.replace(/\s+$/, "") + `</${openForm}>`;
+    const closeTag = `</${openForm}>`;
+    if (closeBeforeTrailingSubtitle) {
+      const trail = result.match(/(\s*<字幕>[\s\S]*?<\/字幕>\s*)$/);
+      if (trail) {
+        const at = result.length - trail[0].length;
+        return result.slice(0, at).replace(/\s+$/, "") + closeTag + trail[0].replace(/\s+$/, "");
+      }
+    }
+    result = result.replace(/\s+$/, "") + closeTag;
   }
+  return result;
+}
+function normalizeVoiceTags(t) {
+  if (!/[语語]音|字幕/.test(t)) return t;
+  let result = t;
+  result = result.replace(/＜\s*[/／]\s*([语語]音|字幕)\s*＞/g, "</$1>");
+  result = result.replace(/＜\s*((?:[语語]音|字幕)[^<>＜＞]*?)\s*＞/g, "<$1>");
+  result = result.replace(/<\s*[/／]\s*([语語]音|字幕)\s*>/g, "</$1>");
+  result = result.replace(/<([语語]音|字幕)\s*([^<>]*?)\s*>/g, (_m, tag, attrs) => {
+    if (!attrs) return `<${tag}>`;
+    const fixed = attrs.replace(/[“”＂]/g, '"').replace(/[‘’]/g, "'").replace(/＝/g, "=").trim();
+    return `<${tag} ${fixed}>`;
+  });
+  result = repairPairedTag(result, /<\/?[语語]音[^>]*>/g, (tok) => /語/.test(tok) ? "\u8A9E\u97F3" : "\u8BED\u97F3", true);
+  result = repairPairedTag(result, /<\/?字幕[^>]*>/g, () => "\u5B57\u5E55", false);
   return result;
 }
 var extractTranslationOriginal = (t) => {
@@ -2450,9 +2465,11 @@ function sanitizeIntoSegments(text) {
         preview: (_raw, match) => (match[1] || "").trim() || "[\u7FFB\u8BD1]"
       },
       {
-        // 闭合容许空格 + 简繁互换 (normalizeVoiceTags 已修, 这里不再依赖 \1 回引)
-        pattern: /<[语語]音[^>]*>([\s\S]*?)<\/\s*[语語]音\s*>/,
-        preview: (_raw, match) => (match[1] || "").trim() || "[\u8BED\u97F3]"
+        // 语音块 + 紧邻的 <字幕> 块是一个原子单元 (字幕是这条语音的中文对照, 拆开
+        // 就配不上了)。字幕前置/后置都容忍; banner 预览优先用字幕 (用户读得懂中文)。
+        // 闭合容许空格 + 简繁互换 (normalizeVoiceTags 已修, 这里不再依赖 \1 回引)。
+        pattern: /(?:<字幕>([\s\S]*?)<\/字幕>\s*)?<[语語]音[^>]*>([\s\S]*?)<\/\s*[语語]音\s*>(?:\s*<字幕>([\s\S]*?)<\/字幕>)?/,
+        preview: (_raw, match) => (match[3] || match[1] || match[2] || "").trim() || "[\u8BED\u97F3]"
       }
     ]
   });
@@ -2772,7 +2789,7 @@ function classifyLLMOutput(text) {
 }
 
 // utils/instantWorkerVersion.ts
-var INSTANT_WORKER_VERSION = "2026-07-02";
+var INSTANT_WORKER_VERSION = "2026-07-04";
 
 // worker/instant-push/src/index.ts
 var MULTIPART_TRANSPORT = { enabled: true };

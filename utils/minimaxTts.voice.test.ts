@@ -76,6 +76,28 @@ describe('parseVoiceOutput', () => {
     expect(r.hasVoiceTag).toBe(false);
     expect(r.display).toBe('前半句话后半句话');
   });
+
+  // ─── <字幕> 显式翻译标签 ───
+  it('extracts <字幕> as subtitle; display excludes both tags', () => {
+    const r = parseVoiceOutput('随口聊一句\n<语音 emotion="calm">Take a rest, okay?</语音>\n<字幕>好好休息，好吗？</字幕>');
+    expect(r.hasVoiceTag).toBe(true);
+    expect(r.subtitle).toBe('好好休息，好吗？');
+    expect(r.speech).toBe('Take a rest, okay?');
+    expect(r.display).toBe('随口聊一句');
+    expect(r.emotion).toBe('calm');
+  });
+  it('subtitle absent → undefined (老格式兼容)', () => {
+    expect(parseVoiceOutput('<语音>hi</语音>').subtitle).toBeUndefined();
+  });
+  it('unclosed voice followed by subtitle → subtitle not swallowed into speech', () => {
+    const r = parseVoiceOutput('<语音>Take a rest.\n<字幕>好好休息。</字幕>');
+    expect(r.speech).toBe('Take a rest.');
+    expect(r.subtitle).toBe('好好休息。');
+  });
+  it('cleanTextForTts never reads subtitle aloud', () => {
+    expect(cleanTextForTts('<语音>spoken</语音><字幕>字幕文字</字幕>')).toBe('spoken');
+    expect(cleanTextForTts('没有语音标签<字幕>字幕文字</字幕>')).toBe('没有语音标签');
+  });
 });
 
 describe('cleanVoiceMarkupForDisplay', () => {

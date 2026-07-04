@@ -720,28 +720,29 @@ ${xhsEnabled ? `${[notionEnabled, feishuEnabled, notionNotesEnabled].filter(Bool
 用户开启了语音消息功能，语音语种为：${langLabel}（${voiceLang}）。
 
 **你可以发送语音消息！** 就像真人用微信一样，你可以选择打字或者发语音。
-用 \`<语音>要说的话</语音>\` 标签来发送语音。标签里的内容会被转成真正的语音条显示给用户。
+发语音用两个标签成对写：\`<语音>${langLabel}台词</语音>\` 紧跟 \`<字幕>中文字幕</字幕>\`。
+<语音> 里是真正被朗读的${langLabel}，<字幕> 里是同一段话的中文——语音条的「转文字」面板会直接用它当对照翻译，用户对着中文听${langLabel}。
 
-因为语音语种设置为${langLabel}，你需要：
-1. 标签外面正常用中文写你想表达的内容（包括舞台指示、括号动作等）
-2. \`<语音>\` 标签里写${langLabel}翻译——这才是真正会被朗读出来的部分。可选地用 emotion 属性标整条情绪：\`<语音 emotion="happy">…</语音>\`，emotion 只能取 happy/sad/angry/fearful/disgusted/surprised/calm/fluent（情绪不强就别加）
+规则：
+1. \`<语音>\` 里写${langLabel}——只写会被朗读的文字。可选 emotion 属性标整条情绪：\`<语音 emotion="happy">…</语音>\`，emotion 只能取 happy/sad/angry/fearful/disgusted/surprised/calm/fluent（情绪不强就别加）
+2. \`<字幕>\` 里写这条语音的中文版，内容和${langLabel}一致、逐段对齐（${langLabel}分几段中文就分几段）。**<字幕> 必须紧跟在 </语音> 后面，永远成对出现，不能单独用**
+3. 标签外可以照常发普通中文短消息（正常闲聊打字），它们显示成普通气泡，和语音内容互相独立、不要复读
 
 示例：
 你说真的假的？
 <语音 emotion="surprised">Wait... are you serious?</语音>
+<字幕>等等……你是认真的？</字幕>
 
-啊不想动了（趴在桌上）
 <语音 emotion="sad">I don't wanna move anymore... (sighs)</语音>
+<字幕>啊不想动了……（叹气）</字幕>
 
 要求：
-- <语音> 里的翻译要自然口语化，符合你的性格，不要机翻味
-- <语音> 里只写会被朗读的文字；想要笑、叹气等真实语气用官方英文标签 (laughs)/(sighs)/(chuckle)/(gasps) 等，**不要写中文（轻笑）这类舞台指示**（中文括号会被直接删掉、不朗读）
-- 每条消息最多一个 <语音> 标签
+- <语音> 里的${langLabel}要自然口语化，符合你的性格，不要机翻味
+- <语音> 里想要笑、叹气等真实语气用官方英文标签 (laughs)/(sighs)/(chuckle)/(gasps) 等，**不要写中文（轻笑）这类舞台指示**（中文括号会被直接删掉、不朗读）
+- 每条消息最多一个 <语音> + <字幕> 组合
 - 不是每条消息都要发语音！像真人一样，有时候打字，有时候发语音，自然切换
 - 比较适合发语音的场景：撒娇、吐槽、语气很重的话、懒得打字的时候
 - 比较适合打字的场景：发链接、正经讨论、很短的回复如"嗯"、"好"
-- **【字幕对齐 · 重要】这是「中文字幕 + ${langLabel}配音」模式：标签外的中文就是这条语音的字幕，\`<语音>\` 里是它的${langLabel}版，两者是同一段话、内容一致。必须逐段对齐——中文用空行分成几段，${langLabel}翻译就分成对应的几段，断点位置一一对应。用户是对着中文在听${langLabel}的，分段不齐、停顿就对不上，听起来会很错位。**
-- 所以：先想好这条话分几段、每段在哪断；中文和${langLabel}用同样的分段写出来，别一边一大段、另一边拆成好几段。
 
 ${voiceActingGuide()}`;
             } else {
@@ -772,7 +773,7 @@ ${voiceActingGuide()}`;
             }
         } else {
             // Voice is disabled — explicitly prohibit voice tags to prevent inertia from call/date history
-            baseSystemPrompt += `\n\n[系统提示: 语音消息功能当前未开启。严禁使用 <语音>...</语音> 标签。所有回复必须是纯文字消息。]`;
+            baseSystemPrompt += `\n\n[系统提示: 语音消息功能当前未开启。严禁使用 <语音>...</语音> 和 <字幕>...</字幕> 标签。所有回复必须是纯文字消息。]`;
         }
 
         // 总纲：放在 system prompt 最末尾，借 recency 抢最强注意力——这是模型生成下一轮前

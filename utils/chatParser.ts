@@ -365,8 +365,9 @@ export const ChatParser = {
         //    切分后再原样还原成一个 chunk。
         const ATOM = String.fromCharCode(2);
         const voiceBlocks: string[] = [];
+        // 语音块 + 紧邻 <字幕> 块是一个原子单元 (字幕是该语音的中文对照, 拆开就配不上)。
         // 闭合标签容许空格 / 简繁互换 (normalizeVoiceTags 在 sanitize 阶段已修, 这里是保险)
-        const guardedText = text.replace(/<[语語]音[^>]*>[\s\S]*?<\/\s*[语語]音\s*>/g, m => {
+        const guardedText = text.replace(/(?:<字幕>[\s\S]*?<\/字幕>\s*)?<[语語]音[^>]*>[\s\S]*?<\/\s*[语語]音\s*>(?:\s*<字幕>[\s\S]*?<\/字幕>)?/g, m => {
             const idx = voiceBlocks.length;
             voiceBlocks.push(m);
             return `\n${ATOM}${idx}${ATOM}\n`;
