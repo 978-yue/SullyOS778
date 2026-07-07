@@ -4,6 +4,7 @@ import { useOS } from '../context/OSContext';
 import { AppID, CharacterProfile, CharacterExportData, UserImpression, MemoryFragment } from '../types';
 import { SlidersHorizontal, SpeakerHigh, Books, BookOpen } from '@phosphor-icons/react';
 import Modal from '../components/os/Modal';
+import FullscreenTextEditor from '../components/os/FullscreenTextEditor';
 import { processImage } from '../utils/file';
 import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
@@ -23,6 +24,13 @@ import { COMMON_TIMEZONES } from '../utils/timezone';
 import { toMountedWorldbook } from '../utils/worldbook';
 import { stripSensitiveCardFields } from '../utils/characterCard';
 import { confirmExportSafety } from '../utils/exportGuard';
+
+// 全屏展开小图标（arrows-out），给编辑框的「全屏」入口用
+const ExpandIcon: React.FC = () => (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+        <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+    </svg>
+);
 
 const CharacterCard: React.FC<{
     char: CharacterProfile;
@@ -65,6 +73,8 @@ const Character: React.FC = () => {
   const [detailTab, setDetailTab] = useState<'identity' | 'memory' | 'impression'>('identity');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formData, setFormData] = useState<CharacterProfile | null>(null);
+  // 全屏展开编辑：记录当前要放大的字段（核心指令 / 世界观等），null = 未展开
+  const [fullscreenField, setFullscreenField] = useState<{ field: keyof CharacterProfile; title: string; placeholder?: string } | null>(null);
   const [isCompressing, setIsCompressing] = useState(false);
   // 头像 URL 输入的 draft, 不逐字 commit 到 formData.avatar —— 否则每输入一个字符,
   // 所有引用 char.avatar 的 <img> 都会拿到不完整字符串当相对路径请求根目录,
@@ -1040,7 +1050,7 @@ ${isInitialGeneration ? `
                                </div>
                                <div className="flex-1 space-y-3">
                                    <input value={formData.name} onChange={(e) => handleChange('name', e.target.value)} className="w-full bg-transparent py-1 text-xl font-medium text-slate-800 border-b border-slate-200" placeholder="名称" />
-                                   <input value={formData.description} onChange={(e) => handleChange('description', e.target.value)} className="w-full bg-transparent py-1 text-sm text-slate-500 border-b border-slate-200" placeholder="描述" />
+                                   <input value={formData.description === '点击编辑设定...' ? '' : formData.description} onChange={(e) => handleChange('description', e.target.value)} className="w-full bg-transparent py-1 text-sm text-slate-500 border-b border-slate-200 placeholder:text-slate-300" placeholder="输入外号/昵称等，ta能看得到" />
                                    {/* 头像 URL 入口: 与左侧上传文件平级. 走 draft -> 失焦/回车 commit,
                                        避免逐字 commit 导致所有引用 char.avatar 的 <img> 在打字时疯狂
                                        请求不完整 URL. https URL 会作为 Instant Push 通知图标传到 worker;
@@ -1081,17 +1091,28 @@ ${isInitialGeneration ? `
                            </div>
                            
                            <div>
-                               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">核心指令 (System Prompt)</label>
-                               <textarea value={formData.systemPrompt} onChange={(e) => handleChange('systemPrompt', e.target.value)} className="w-full h-40 bg-white rounded-3xl p-5 text-sm shadow-sm resize-none focus:ring-1 focus:ring-primary/20 transition-all vr-reader-scroll" placeholder="设定..." />
+                               <div className="flex items-center justify-between mb-1.5">
+                                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">核心指令 (System Prompt)</label>
+                                   <button type="button" onClick={() => setFullscreenField({ field: 'systemPrompt', title: '核心指令 (System Prompt)', placeholder: '设定...' })} className="flex items-center gap-1 text-[10px] font-bold text-primary/70 hover:text-primary px-2 py-0.5 rounded-full hover:bg-primary/10 transition-colors">
+                                       <ExpandIcon /> 全屏
+                                   </button>
+                               </div>
+                               <textarea value={formData.systemPrompt} onChange={(e) => handleChange('systemPrompt', e.target.value)} className="w-full h-40 bg-white rounded-3xl p-5 text-sm shadow-sm resize-none focus:ring-1 focus:ring-primary/20 transition-all vr-reader-scroll" placeholder="设定..." style={{ touchAction: 'pan-y', overscrollBehavior: 'contain', WebkitOverflowScrolling: 'touch' }} />
                            </div>
 
                            <div>
-                               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">世界观 / 设定补充 (Worldview & Lore)</label>
+                               <div className="flex items-center justify-between mb-1.5">
+                                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">世界观 / 设定补充 (Worldview & Lore)</label>
+                                   <button type="button" onClick={() => setFullscreenField({ field: 'worldview', title: '世界观 / 设定补充', placeholder: '在这个世界里，魔法是存在的...' })} className="flex items-center gap-1 text-[10px] font-bold text-primary/70 hover:text-primary px-2 py-0.5 rounded-full hover:bg-primary/10 transition-colors">
+                                       <ExpandIcon /> 全屏
+                                   </button>
+                               </div>
                                <textarea
                                     value={formData.worldview || ''}
                                     onChange={(e) => handleChange('worldview', e.target.value)}
                                     className="w-full h-24 bg-white rounded-3xl p-5 text-sm shadow-sm resize-none focus:ring-1 focus:ring-primary/20 transition-all vr-reader-scroll"
                                     placeholder="在这个世界里，魔法是存在的..."
+                                    style={{ touchAction: 'pan-y', overscrollBehavior: 'contain', WebkitOverflowScrolling: 'touch' }}
                                 />
                            </div>
 
@@ -1506,6 +1527,16 @@ ${isInitialGeneration ? `
                 </p>
             </div>
         </Modal>
+
+        {/* 全屏展开编辑：核心指令 / 世界观等大段文本，放大到全屏输入 + 顺畅滚动 */}
+        <FullscreenTextEditor
+            open={!!fullscreenField && !!formData}
+            title={fullscreenField?.title || ''}
+            value={(fullscreenField && formData ? (formData[fullscreenField.field] as string) : '') || ''}
+            placeholder={fullscreenField?.placeholder}
+            onChange={(next) => { if (fullscreenField) handleChange(fullscreenField.field, next); }}
+            onClose={() => setFullscreenField(null)}
+        />
     </div>
   );
 };

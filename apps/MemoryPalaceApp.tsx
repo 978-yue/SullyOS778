@@ -12,6 +12,7 @@ import {
 } from '../utils/memoryPalace';
 import type { Anticipation, MigrationProgress, DigestResult, MemoryLink, EventBox } from '../utils/memoryPalace';
 import { confirmExportSafety } from '../utils/exportGuard';
+import FullscreenTextEditor from '../components/os/FullscreenTextEditor';
 import type { Message } from '../types';
 
 /** 手动总结面板：每页渲染多少条聊天记录（翻页，避免一次性塞几百条 DOM 卡顿） */
@@ -537,6 +538,8 @@ export default function MemoryPalaceApp() {
     const [editRoom, setEditRoom] = useState<MemoryRoom>('living_room');
     const [editTags, setEditTags] = useState('');
     const [saving, setSaving] = useState(false);
+    // 记忆内容全屏展开编辑（编辑框太小、文本滑不动时用）
+    const [contentFullscreen, setContentFullscreen] = useState(false);
 
     // Embedding 配置本地状态（从全局配置初始化）
     const [embUrl, setEmbUrl] = useState(memoryPalaceConfig.embedding.baseUrl || 'https://api.siliconflow.cn/v1');
@@ -968,6 +971,7 @@ export default function MemoryPalaceApp() {
             // 远程同步由 MemoryNodeDB.save 自动处理
             setSelectedNode(updated);
             setEditing(false);
+            setContentFullscreen(false);
             // 如果房间变了，刷新房间列表
             if (selectedRoom) {
                 const nodes = await MemoryNodeDB.getByRoom(char.id, selectedRoom);
@@ -1659,7 +1663,8 @@ export default function MemoryPalaceApp() {
             <div
                 style={{
                     paddingLeft: 20, paddingRight: 20, paddingBottom: 28, paddingTop: SAFE_PAD_TOP,
-                    maxHeight: '100%', overflowY: 'auto',
+                    height: '100%', maxHeight: '100%', overflowY: 'auto',
+                    WebkitOverflowScrolling: 'touch', overscrollBehavior: 'contain', touchAction: 'pan-y',
                     background: 'linear-gradient(180deg, #faf5ff 0%, #f5f3ff 40%, #ffffff 100%)',
                     minHeight: '100%',
                     position: 'relative',
@@ -4764,10 +4769,18 @@ create table if not exists memory_vectors (
         const MOODS = ['happy', 'sad', 'angry', 'anxious', 'tender', 'peaceful', 'excited', 'nostalgic', 'frustrated', 'hopeful', 'lonely', 'grateful'];
 
         return (
-            <div style={{ paddingLeft: 16, paddingRight: 16, paddingBottom: 16, paddingTop: SAFE_PAD_TOP, maxHeight: '100%', overflowY: 'auto' }}>
+            <div style={{ paddingLeft: 16, paddingRight: 16, paddingBottom: 16, paddingTop: SAFE_PAD_TOP, maxHeight: '100%', overflowY: 'auto', WebkitOverflowScrolling: 'touch', overscrollBehavior: 'contain', touchAction: 'pan-y' }}>
+                <FullscreenTextEditor
+                    open={contentFullscreen && editing}
+                    title="编辑记忆内容"
+                    value={editContent}
+                    placeholder="记录这段记忆的内容..."
+                    onChange={setEditContent}
+                    onClose={() => setContentFullscreen(false)}
+                />
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                     <div
-                        onClick={() => { setView(prevView); setSelectedNode(null); setEditing(false); }}
+                        onClick={() => { setView(prevView); setSelectedNode(null); setEditing(false); setContentFullscreen(false); }}
                         style={{ fontSize: 13, color: '#6b7280', cursor: 'pointer' }}
                     >
                         ← 返回 {prevView === 'all' ? '全部记忆' : prevView === 'boxes' ? '事件盒' : getRoomLabel(selectedRoom || selectedNode.room, userProfile?.name)}
@@ -4791,12 +4804,28 @@ create table if not exists memory_vectors (
                         /* ─── 编辑模式 ─── */
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                             <div>
-                                <label className={labelClass}>内容</label>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                    <label className={labelClass}>内容</label>
+                                    <button
+                                        type="button"
+                                        onClick={() => setContentFullscreen(true)}
+                                        style={{
+                                            display: 'inline-flex', alignItems: 'center', gap: 4,
+                                            fontSize: 11, fontWeight: 700, color: '#7c3aed',
+                                            padding: '2px 8px', borderRadius: 999, border: 'none',
+                                            background: 'rgba(124,58,237,0.08)', cursor: 'pointer',
+                                            marginBottom: 6,
+                                        }}
+                                    >
+                                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" /></svg>
+                                        全屏
+                                    </button>
+                                </div>
                                 <textarea
                                     value={editContent}
                                     onChange={e => setEditContent(e.target.value)}
                                     className={inputClass}
-                                    style={{ minHeight: 100, resize: 'vertical', fontFamily: 'inherit' }}
+                                    style={{ minHeight: 120, resize: 'vertical', fontFamily: 'inherit', touchAction: 'pan-y', overscrollBehavior: 'contain', WebkitOverflowScrolling: 'touch' }}
                                 />
                             </div>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
@@ -4864,6 +4893,7 @@ create table if not exists memory_vectors (
                                 <button
                                     onClick={() => {
                                         setEditing(false);
+                                        setContentFullscreen(false);
                                         setEditContent(selectedNode.content);
                                         setEditImportance(selectedNode.importance);
                                         setEditMood(selectedNode.mood);

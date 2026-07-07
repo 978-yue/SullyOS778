@@ -1157,7 +1157,7 @@ const CallApp: React.FC = () => {
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="font-semibold text-[15px] truncate" style={selected ? { color: accentColor } : undefined}>{char.name}</div>
-                      <div className="text-xs text-white/45 mt-0.5 truncate">{char.description || '点击编辑设定...'}</div>
+                      <div className="text-xs text-white/45 mt-0.5 truncate">{(char.description && char.description !== '点击编辑设定...') ? char.description : '暂无备注'}</div>
                     </div>
                     <span className="text-base shrink-0" style={{ color: selected ? accentColor : 'rgba(255,255,255,0.25)' }}>✦</span>
                   </div>
