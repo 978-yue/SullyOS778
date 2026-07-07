@@ -187,4 +187,13 @@ describe('全局隐藏模块（长按页签隐藏）', () => {
         const text = await buildLifeRecordInjection(char, '小鱼');
         expect(text).toBe('');
     });
+
+    it('生理期开启时：注入含措辞约束，禁止怀孕导向说法（易孕窗等），只许中性生理阶段词', async () => {
+        await DB.saveLifeRecordSettings({ id: 'main', hiddenModules: [] });
+        const char = mkChar();
+        const text = await buildLifeRecordInjection(char, '小鱼');
+        expect(text).toContain('严禁任何以怀孕为导向的说法');
+        expect(text).toContain('易孕窗');
+        expect(text).toContain('排卵期');
+    });
 });
