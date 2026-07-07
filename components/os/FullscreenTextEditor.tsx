@@ -40,7 +40,10 @@ const FullscreenTextEditor: React.FC<FullscreenTextEditorProps> = ({ open, title
                 position: 'fixed', inset: 0, zIndex: 1000,
                 display: 'flex', flexDirection: 'column',
                 background: 'linear-gradient(180deg, #faf5ff 0%, #ffffff 45%)',
-                paddingTop: 'var(--safe-top)', paddingBottom: 'var(--safe-bottom)',
+                // 顶栏自己让开安全区 + SullyOS 状态栏：全屏面板统一用 --chrome-top
+                // （= --safe-top + 状态栏高度；状态栏隐藏时自动退化成 --safe-top），
+                // 跟 VRWorld / 剧场 / 交换日记等全屏顶栏一致，避免「完成」贴到状态栏太靠上。
+                paddingTop: 'var(--chrome-top)', paddingBottom: 'var(--safe-bottom)',
                 animation: 'appEnterFade 160ms ease-out both',
             }}
         >
