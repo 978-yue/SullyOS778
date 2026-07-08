@@ -2644,7 +2644,9 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               // 家园（同世界观多角色大世界）——世界定义 + 演绎历史。导入端早已支持恢复
               // （worldHomeLocal 本机配置也已随导出带走），但这两个 store 之前漏在清单外，
               // 导致导出的备份不含家园数据。
-              'worlds', 'world_episodes'
+              'worlds', 'world_episodes',
+              // 生活记录（档案 App：生理期/药盒打卡/锻炼 + 药盒计划 + 周期设置）
+              'life_records', 'med_plans', 'life_record_settings'
           ];
 
           if (mode === 'full') {
@@ -2853,7 +2855,8 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           // Stores that never contain base64 image data — skip recursive traversal
           const noImageStores = new Set([
               'memory_nodes', 'memory_vectors', 'memory_links', 'topic_boxes', 'anticipations', 'event_boxes',
-              'bank_transactions', 'scheduled_messages', 'memory_batches', 'hotnews_snapshots'
+              'bank_transactions', 'scheduled_messages', 'memory_batches', 'hotnews_snapshots',
+              'life_records', 'med_plans', 'life_record_settings'
           ]);
 
           // Chunked processObject for large arrays — yields to main thread every 200 items
@@ -3025,6 +3028,10 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                   // 家园 —— 键名须与 importFullData 读取的字段（data.worlds / data.worldEpisodes）对齐
                   case 'worlds': backupData.worlds = processedData; break;
                   case 'world_episodes': backupData.worldEpisodes = processedData; break;
+                  // 生活记录 —— 键名与 importFullData 的 data.lifeRecords / medPlans / lifeRecordSettings 对齐
+                  case 'life_records': backupData.lifeRecords = processedData; break;
+                  case 'med_plans': backupData.medPlans = processedData; break;
+                  case 'life_record_settings': backupData.lifeRecordSettings = processedData; break;
               }
 
               await new Promise(resolve => setTimeout(resolve, 10));

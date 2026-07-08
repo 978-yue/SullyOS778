@@ -50,7 +50,7 @@ const UserApp: React.FC = () => {
                 </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto px-5 pb-10 pt-5 space-y-5">
+            <div className="flex-1 overflow-y-auto px-5 pt-5 space-y-5" style={{ paddingBottom: 'calc(2.5rem + var(--safe-bottom))' }}>
                 {tab === 'life' && <LifeRecordPanel />}
                 {tab === 'profile' && <>
 
