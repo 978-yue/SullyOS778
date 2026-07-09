@@ -1364,8 +1364,15 @@ export const DB = {
 
   saveDailySchedule: async (schedule: DailySchedule): Promise<void> => {
       const db = await openDB();
-      const transaction = db.transaction(STORE_DAILY_SCHEDULE, 'readwrite');
-      transaction.objectStore(STORE_DAILY_SCHEDULE).put(schedule);
+      // 等事务真正 commit 再 resolve：手动改日程后立刻发消息时，聊天侧会重新读 DB 拼 prompt，
+      // 若这里 fire-and-forget 提前 resolve，读到的可能还是旧值。await 到 oncomplete 才算落库。
+      return new Promise((resolve, reject) => {
+          const transaction = db.transaction(STORE_DAILY_SCHEDULE, 'readwrite');
+          transaction.objectStore(STORE_DAILY_SCHEDULE).put(schedule);
+          transaction.oncomplete = () => resolve();
+          transaction.onerror = () => reject(transaction.error);
+          transaction.onabort = () => reject(transaction.error);
+      });
   },
 
   // ─── 热点快照 (分时段，全角色共享) ───

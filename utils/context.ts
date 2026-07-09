@@ -411,11 +411,13 @@ export const ContextBuilder = {
         const currentMinutes = now.getHours() * 60 + now.getMinutes();
 
         // 1. 计算当前 / 下一个时段
+        let currentIdx = -1;
         let currentSlot: typeof schedule.slots[0] | null = null;
         let nextSlot: typeof schedule.slots[0] | null = null;
         for (let i = schedule.slots.length - 1; i >= 0; i--) {
             const [h, m] = schedule.slots[i].startTime.split(':').map(Number);
             if (currentMinutes >= h * 60 + m) {
+                currentIdx = i;
                 currentSlot = schedule.slots[i];
                 nextSlot = i < schedule.slots.length - 1 ? schedule.slots[i + 1] : null;
                 break;
@@ -425,15 +427,25 @@ export const ContextBuilder = {
             nextSlot = schedule.slots[0];
         }
 
-        // 2. 当前时段硬事实（每轮独立注入）
-        let slotHeader = '';
+        // 2. 硬事实：注入「今日完整日程」而非只给当前 + 下一段。
+        //    用户手动改了某个（尤其是靠后的）时段后，之前只注入 current/next 会导致
+        //    AI 完全看不到那次修改——发给模型的还是「未改」的样子。这里把全天时间线
+        //    整份摊给模型（并标注「现在」），任何 slot 的时间/活动/描述改动都能到达 AI，
+        //    并声明「以这份为准」，压过下面可能已过时的意识流独白。
+        let slotHeader = '今日日程（你自己的真实安排，以这份为准）：\n';
+        schedule.slots.forEach((s, i) => {
+            let line = `· ${s.startTime} ${s.activity}`;
+            if (s.location) line += `（${s.location}）`;
+            if (s.description) line += `——${s.description}`;
+            if (i === currentIdx) line += '  ← 现在';
+            slotHeader += line + '\n';
+        });
         if (currentSlot) {
-            slotHeader = `当前时段：${currentSlot.startTime} 你正在${currentSlot.activity}`;
-            if (currentSlot.location) slotHeader += `（${currentSlot.location}）`;
-            if (nextSlot) slotHeader += `\n之后安排：${nextSlot.startTime} ${nextSlot.activity}`;
-            slotHeader += '\n';
+            slotHeader += `此刻你正在「${currentSlot.activity}」`;
+            if (nextSlot) slotHeader += `，之后是 ${nextSlot.startTime} ${nextSlot.activity}`;
+            slotHeader += '。\n';
         } else if (nextSlot) {
-            slotHeader = `今天还没开始活动，稍后先${nextSlot.activity}（${nextSlot.startTime}）\n`;
+            slotHeader += `今天还没开始活动，稍后先${nextSlot.activity}（${nextSlot.startTime}）。\n`;
         }
 
         // 3. 意识流独白
