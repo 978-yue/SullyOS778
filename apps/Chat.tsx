@@ -2530,9 +2530,15 @@ const Chat: React.FC = () => {
                   backgroundImage:
                       'radial-gradient(circle at 15% 20%, rgba(59,130,246,0.18), transparent 28%), radial-gradient(circle at 85% 15%, rgba(244,114,182,0.18), transparent 24%), radial-gradient(circle at 60% 75%, rgba(45,212,191,0.18), transparent 26%)',
                 }
-              : {
-                  backgroundImage: 'none',
-                };
+              : chatChromeStyle === 'soft'
+                ? {
+                    // 默认壳（soft+纯净）：灰色平涂换成极轻的上浅下深渐变，柔一点、不喧宾夺主
+                    backgroundColor: '#f1f5f9',
+                    backgroundImage: 'linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%)',
+                  }
+                : {
+                    backgroundImage: 'none',
+                  };
     // 动森彩蛋：浅奶油米黄中心（上下绿条由 header/输入栏负责），配色参考 Pocket Camp。
     const acnhRootClass = 'flex flex-col h-full overflow-hidden relative font-sans transition-[background-color] duration-500';
     const acnhRootStyle: React.CSSProperties = {

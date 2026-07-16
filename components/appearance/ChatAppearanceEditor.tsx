@@ -349,6 +349,10 @@ const backgroundStyleForPreview = (style: string, chrome: string): React.CSSProp
                 'radial-gradient(circle at 15% 20%, rgba(59,130,246,0.18), transparent 28%), radial-gradient(circle at 85% 15%, rgba(244,114,182,0.18), transparent 24%), radial-gradient(circle at 60% 75%, rgba(45,212,191,0.18), transparent 26%)',
         };
     }
+    if (chrome === 'soft') {
+        // 与真聊天保持一致：默认壳的纯净背景是极轻的上浅下深渐变
+        return { backgroundColor: '#f1f5f9', backgroundImage: 'linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%)' };
+    }
     return { backgroundColor: base };
 };
 

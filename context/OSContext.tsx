@@ -437,11 +437,26 @@ const defaultApiConfig: APIConfig = {
 };
 
 const generateAvatar = (seed: string) => {
-    const colors = ['FF9AA2', 'FFB7B2', 'FFDAC1', 'E2F0CB', 'B5EAD7', 'C7CEEA', 'e2e8f0', 'fcd34d', 'fca5a5'];
-    const color = colors[seed.charCodeAt(0) % colors.length];
+    // 柔和对角渐变字母头像。索引 4 是靛蓝——默认档案名 'User'（'U'=85, 85%9=4）正好落在这里，
+    // 和默认靛蓝气泡同色系，首次进聊天不再是一块突兀的绿底。
+    const colors: Array<[string, string]> = [
+        ['fda4af', 'fb7185'], // rose
+        ['fdba74', 'fb923c'], // orange
+        ['fcd34d', 'f59e0b'], // amber
+        ['5eead4', '2dd4bf'], // teal
+        ['a5b4fc', '818cf8'], // indigo (default 'User')
+        ['7dd3fc', '38bdf8'], // sky
+        ['c4b5fd', 'a78bfa'], // violet
+        ['f0abfc', 'e879f9'], // fuchsia
+        ['cbd5e1', '94a3b8'], // slate
+    ];
+    const [from, to] = colors[seed.charCodeAt(0) % colors.length];
     const letter = seed.charAt(0).toUpperCase();
-    return `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="%23${color}"/><text x="50" y="55" font-family="sans-serif" font-weight="bold" font-size="50" text-anchor="middle" dy=".3em" fill="white" opacity="0.9">${letter}</text></svg>`;
+    return `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="%23${from}"/><stop offset="1" stop-color="%23${to}"/></linearGradient></defs><rect width="100" height="100" fill="url(%23g)"/><text x="50" y="50" font-family="sans-serif" font-weight="bold" font-size="44" text-anchor="middle" dy=".36em" fill="white" opacity="0.95">${letter}</text></svg>`;
 };
+
+// 旧版 generateAvatar 的产物特征（平涂 rect + 字母），用于启动时把没换过头像的老档案迁到新版渐变头像
+const LEGACY_FLAT_AVATAR_RE = /^data:image\/svg\+xml;utf8,<svg [^>]*viewBox="0 0 100 100"><rect width="100" height="100" fill="%23(?:FF9AA2|FFB7B2|FFDAC1|E2F0CB|B5EAD7|C7CEEA|e2e8f0|fcd34d|fca5a5)"\/><text /;
 
 const defaultUserProfile: UserProfile = {
     name: 'User',
@@ -1278,7 +1293,16 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
         setNovels(dbNovels);
         setSongs(dbSongs);
         setCustomThemes(dbThemes);
-        if (dbUser) setUserProfile(dbUser);
+        if (dbUser) {
+            // 静默迁移：档案头像还是旧版自动生成的「平涂色块+字母」SVG（如默认绿底 U）时，
+            // 换成新版渐变字母头像。用户自己上传/更换过的头像不受影响。
+            let finalUser = dbUser;
+            if (LEGACY_FLAT_AVATAR_RE.test(finalUser.avatar || '')) {
+                finalUser = { ...finalUser, avatar: generateAvatar(finalUser.name || 'User') };
+                DB.saveUserProfile(finalUser).catch(() => { /* 下次启动再试 */ });
+            }
+            setUserProfile(finalUser);
+        }
 
       } catch (err) {
         console.error('Data init failed:', err);
