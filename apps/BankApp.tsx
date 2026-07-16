@@ -14,14 +14,14 @@ import { SHOP_RECIPES, INITIAL_DOLLHOUSE, BANK_PRICES } from '../components/bank
 import {
     computeWeather, weightedSpend, rollPetEvents, applyEvents,
     nextStreak, computeCoins, levelForEnergy, levelTitle,
-    composeLocalEpisode, txFlavor, overspendForecast, WEATHER_META,
+    composeLocalEpisode, txFlavor, overspendForecast, WEATHER_META, localDateStr,
 } from '../utils/bank/narrative';
 import { processImage } from '../utils/file';
 import { ContextBuilder } from '../utils/context';
 import { Coffee, ClipboardText, ChartBar, Coin, Lightning, Storefront, FilmSlate } from '@phosphor-icons/react';
 
-/** 本 App 的"日"键：UTC 日期字符串（与存量 tx.dateStr / lastLoginDate 的既有口径一致） */
-const todayStr = () => new Date().toISOString().split('T')[0];
+/** 本 App 的"日"键：本地时区日期（与手帐/日记 App 同口径；v3 前的存量数据是 UTC 口径） */
+const todayStr = () => localDateStr();
 
 const INITIAL_STATE: BankFullState = {
     config: {
@@ -273,7 +273,7 @@ const BankApp: React.FC = () => {
             // 昨日预算结余 → 自动注入储蓄目标（复活 goal.currentAmount）
             const yesterdayDate = new Date();
             yesterdayDate.setDate(yesterdayDate.getDate() - 1);
-            const yesterdayStr = yesterdayDate.toISOString().split('T')[0];
+            const yesterdayStr = localDateStr(yesterdayDate);
 
             const yesterTx = txs.filter(t => t.dateStr === yesterdayStr);
             let updatedGoals = currentState.goals;
@@ -414,7 +414,7 @@ const BankApp: React.FC = () => {
     /** 近 7 日（不含今日）有记账的日子的加权支出，用于进步分基线 */
     const recentWeightedSpends = (txs: BankTransaction[], today: string): number[] => {
         // 只看今天之前 14 天内的流水，避免全量历史扫描
-        const cutoff = new Date(Date.now() - 14 * 86400000).toISOString().split('T')[0];
+        const cutoff = localDateStr(new Date(Date.now() - 14 * 86400000));
         const byDay: Record<string, BankTransaction[]> = {};
         for (const t of txs) {
             if (t.dateStr >= today || t.dateStr < cutoff) continue;

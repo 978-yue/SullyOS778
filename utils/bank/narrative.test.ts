@@ -4,7 +4,7 @@ import {
     nextStreak, streakMultiplier, computeCoins,
     levelForEnergy, levelTitle,
     pairKey, relationTier, rollPetEvents, applyEvents,
-    composeLocalEpisode, txFlavor, overspendForecast,
+    composeLocalEpisode, txFlavor, overspendForecast, localDateStr,
 } from './narrative';
 import { BankTransaction, ShopStaff } from '../../types';
 
@@ -21,6 +21,15 @@ const seq = (...vals: number[]) => {
     let i = 0;
     return () => vals[i++ % vals.length];
 };
+
+describe('localDateStr', () => {
+    it('输出本地时区的 YYYY-MM-DD（而非 UTC）', () => {
+        // 本地 2026-07-16 00:30 —— UTC 口径在东侧时区会给出前一天
+        const d = new Date(2026, 6, 16, 0, 30);
+        expect(localDateStr(d)).toBe('2026-07-16');
+        expect(localDateStr(new Date(2026, 0, 1, 23, 59))).toBe('2026-01-01');
+    });
+});
 
 describe('加权支出与分类', () => {
     it('房租和奶茶不同罪：账单权重 0.2，餐饮 0.7', () => {

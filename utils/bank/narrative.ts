@@ -11,6 +11,20 @@
 import { BankTransaction, BankWeather, BankPetEvent, ShopStaff } from '../../types';
 
 // ---------------------------------------------------------------------------
+// 日期口径：本地时区（与手帐/日记 App 的 getLocalDateStr 同口径）
+// 早期存钱罐数据用的是 UTC toISOString，东八区早上 8 点前的记账会归到前一天，
+// v3 起统一按用户系统本地时间记"日"。
+// ---------------------------------------------------------------------------
+
+/** 本地时区的 YYYY-MM-DD */
+export function localDateStr(d: Date = new Date()): string {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
+
+// ---------------------------------------------------------------------------
 // 消费分类（与 BankAnalytics 的 8 分类保持一致）
 // ---------------------------------------------------------------------------
 
