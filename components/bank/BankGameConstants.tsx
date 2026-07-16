@@ -20,14 +20,22 @@ export const BANK_ASSETS = {
     }
 };
 
+/** 金币价格表（v3 唯一事实来源——按钮标签与实际扣费都从这里取，禁止散落魔法数字） */
+export const BANK_PRICES = {
+    staffRest: 10,
+    guestbookRefresh: 20,
+    hireStaff: 100,
+    adoptPet: 80,
+} as const;
+
 export const SHOP_RECIPES: ShopRecipe[] = [
     { id: 'recipe-coffee-001', name: '手冲咖啡', icon: 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/2615.png', cost: 0, appeal: 10, isUnlocked: true },
-    { id: 'recipe-cake-001', name: '草莓蛋糕', icon: 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f370.png', cost: 50, appeal: 20, isUnlocked: false },
-    { id: 'recipe-tea-001', name: '伯爵红茶', icon: 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f375.png', cost: 80, appeal: 25, isUnlocked: false },
-    { id: 'recipe-donut-001', name: '甜甜圈', icon: 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f369.png', cost: 120, appeal: 30, isUnlocked: false },
-    { id: 'recipe-icecream-001', name: '抹茶冰淇淋', icon: 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f366.png', cost: 200, appeal: 40, isUnlocked: false },
-    { id: 'recipe-pudding-001', name: '焦糖布丁', icon: 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f36e.png', cost: 300, appeal: 50, isUnlocked: false },
-    { id: 'recipe-cocktail-001', name: '特调气泡水', icon: 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f379.png', cost: 500, appeal: 80, isUnlocked: false },
+    { id: 'recipe-cake-001', name: '草莓蛋糕', icon: 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f370.png', cost: 25, appeal: 20, isUnlocked: false },
+    { id: 'recipe-tea-001', name: '伯爵红茶', icon: 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f375.png', cost: 40, appeal: 25, isUnlocked: false },
+    { id: 'recipe-donut-001', name: '甜甜圈', icon: 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f369.png', cost: 60, appeal: 30, isUnlocked: false },
+    { id: 'recipe-icecream-001', name: '抹茶冰淇淋', icon: 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f366.png', cost: 100, appeal: 40, isUnlocked: false },
+    { id: 'recipe-pudding-001', name: '焦糖布丁', icon: 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f36e.png', cost: 150, appeal: 50, isUnlocked: false },
+    { id: 'recipe-cocktail-001', name: '特调气泡水', icon: 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f379.png', cost: 250, appeal: 80, isUnlocked: false },
 ];
 
 export const AVAILABLE_STAFF: Omit<ShopStaff, 'hireDate' | 'fatigue'>[] = [
@@ -55,7 +63,7 @@ export const ROOM_LAYOUTS: RoomLayout[] = [
         name: '后厨',
         icon: 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f373.png',
         description: '宽敞的厨房空间',
-        apCost: 100,
+        apCost: 50,
         floorWidthRatio: 1,
         floorDepthRatio: 0.8,
         hasCounter: true,
@@ -66,7 +74,7 @@ export const ROOM_LAYOUTS: RoomLayout[] = [
         name: '休息室',
         icon: 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f6cb.png',
         description: '温馨的休息区，适合放沙发',
-        apCost: 150,
+        apCost: 80,
         floorWidthRatio: 1,
         floorDepthRatio: 1,
         hasCounter: false,
@@ -77,7 +85,7 @@ export const ROOM_LAYOUTS: RoomLayout[] = [
         name: '储藏室',
         icon: 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f4e6.png',
         description: '小型储物间',
-        apCost: 80,
+        apCost: 40,
         floorWidthRatio: 0.7,
         floorDepthRatio: 0.7,
         hasCounter: false,
@@ -88,7 +96,7 @@ export const ROOM_LAYOUTS: RoomLayout[] = [
         name: 'VIP包间',
         icon: 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/2728.png',
         description: '高级包间，适合放高端装饰',
-        apCost: 300,
+        apCost: 150,
         floorWidthRatio: 1,
         floorDepthRatio: 1,
         hasCounter: false,
@@ -99,7 +107,7 @@ export const ROOM_LAYOUTS: RoomLayout[] = [
         name: '空中花园',
         icon: 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f33f.png',
         description: '二楼露天阳台风格',
-        apCost: 250,
+        apCost: 120,
         floorWidthRatio: 1,
         floorDepthRatio: 1,
         hasCounter: false,

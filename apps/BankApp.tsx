@@ -2,18 +2,26 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useOS } from '../context/OSContext';
 import { DB } from '../utils/db';
-import { BankFullState, BankTransaction, SavingsGoal, ShopStaff, BankGuestbookItem, DollhouseState } from '../types';
-import { safeResponseJson } from '../utils/safeApi';
+import { BankFullState, BankTransaction, SavingsGoal, ShopStaff, BankGuestbookItem, DollhouseState, BankEpisode, BankWeather } from '../types';
+import { safeResponseJson, safeFetchJson, extractJson } from '../utils/safeApi';
 import { injectMemoryPalace } from '../utils/memoryPalace/pipeline';
 import Modal from '../components/os/Modal';
-import BankShopScene from '../components/bank/BankShopScene';
 import BankDollhouse from '../components/bank/BankDollhouse';
 import BankGameMenu from '../components/bank/BankGameMenu';
 import BankAnalytics from '../components/bank/BankAnalytics';
-import { SHOP_RECIPES, INITIAL_DOLLHOUSE } from '../components/bank/BankGameConstants';
+import BankEpisodeOverlay from '../components/bank/BankEpisodeOverlay';
+import { SHOP_RECIPES, INITIAL_DOLLHOUSE, BANK_PRICES } from '../components/bank/BankGameConstants';
+import {
+    computeWeather, weightedSpend, rollPetEvents, applyEvents,
+    nextStreak, computeCoins, levelForEnergy, levelTitle,
+    composeLocalEpisode, txFlavor, overspendForecast, WEATHER_META,
+} from '../utils/bank/narrative';
 import { processImage } from '../utils/file';
 import { ContextBuilder } from '../utils/context';
-import { Coffee, ClipboardText, ChartBar, Coin, Target, UserCircle, BookOpen, Lightning, Storefront } from '@phosphor-icons/react';
+import { Coffee, ClipboardText, ChartBar, Coin, Lightning, Storefront, FilmSlate } from '@phosphor-icons/react';
+
+/** 本 App 的"日"键：UTC 日期字符串（与存量 tx.dateStr / lastLoginDate 的既有口径一致） */
+const todayStr = () => new Date().toISOString().split('T')[0];
 
 const INITIAL_STATE: BankFullState = {
     config: {
@@ -21,7 +29,7 @@ const INITIAL_STATE: BankFullState = {
         currencySymbol: '¥', 
     },
     shop: {
-        actionPoints: 100,
+        actionPoints: 200, // v3: 新手礼包 200 金币
         shopName: '咖啡馆',
         shopLevel: 1,
         appeal: 100,
@@ -47,7 +55,13 @@ const INITIAL_STATE: BankFullState = {
     },
     goals: [],
     todaySpent: 0,
-    lastLoginDate: new Date().toISOString().split('T')[0],
+    lastLoginDate: todayStr(),
+    // v3: 元气天气 + 宠物剧集系统（actionPoints 自 v3 起存储金币）
+    petRelations: {},
+    streak: 0,
+    cumulativeEnergy: 0,
+    episodes: [],
+    dataVersion: 3,
 };
 
 const BankApp: React.FC = () => {
@@ -61,6 +75,7 @@ const BankApp: React.FC = () => {
     // so we can't rely on setState's updater callback running before DB.save)
     const stateRef = useRef<BankFullState>(INITIAL_STATE);
     const dollhouseRef = useRef<DollhouseState>(INITIAL_DOLLHOUSE);
+    const transactionsRef = useRef<BankTransaction[]>([]);
     
     // Tabs: 'game' (Shop) | 'manage' (Menu) | 'report' (Finance)
     const [activeTab, setActiveTab] = useState<'game' | 'manage' | 'report'>('game');
@@ -86,6 +101,10 @@ const BankApp: React.FC = () => {
 
     // Guestbook Processing
     const [isRefreshingGuestbook, setIsRefreshingGuestbook] = useState(false);
+
+    // 今日开演 (Daily Episode)
+    const [showEpisode, setShowEpisode] = useState(false);
+    const [isGeneratingEpisode, setIsGeneratingEpisode] = useState(false);
 
     // Load Data
     useEffect(() => {
@@ -233,31 +252,53 @@ const BankApp: React.FC = () => {
             currentState = { ...currentState, dataVersion: 2 };
         }
 
-        // DAILY RESET LOGIC
-        const today = new Date().toISOString().split('T')[0];
+        // Migration v3: 元气天气 + 宠物剧集系统。AP 余额原地 1:1 变为金币
+        // （字段名 actionPoints 保留，语义改为金币），种入新系统字段。
+        if (!currentState.dataVersion || currentState.dataVersion < 3) {
+            currentState = {
+                ...currentState,
+                petRelations: currentState.petRelations || {},
+                streak: currentState.streak || 0,
+                cumulativeEnergy: currentState.cumulativeEnergy || 0,
+                episodes: currentState.episodes || [],
+                dataVersion: 3,
+            };
+            addToast('存钱罐焕新：AP 已 1:1 换成金币 🪙，每天记账后按「开演」看宠物剧！', 'info');
+        }
+
+        // DAILY RESET LOGIC（v3：不再发 AP——金币只产自「今日开演」）
+        const today = todayStr();
 
         if (currentState.lastLoginDate !== today) {
-            // Find yesterday's expenses to calculate AP
+            // 昨日预算结余 → 自动注入储蓄目标（复活 goal.currentAmount）
             const yesterdayDate = new Date();
             yesterdayDate.setDate(yesterdayDate.getDate() - 1);
             const yesterdayStr = yesterdayDate.toISOString().split('T')[0];
 
             const yesterTx = txs.filter(t => t.dateStr === yesterdayStr);
-            let gainedAP = 0;
-
+            let updatedGoals = currentState.goals;
+            let goalToastMsg = '';
             if (yesterTx.length > 0) {
                 const yesterSpent = yesterTx.reduce((sum, t) => sum + t.amount, 0);
-                // Core Mechanic: AP = Budget - Spent
-                gainedAP = Math.max(0, Math.floor(currentState.config.dailyBudget - yesterSpent));
-            } else {
-                // Punishment: If no record, minimal AP or zero?
-                // Let's implement logic: If no record, 0 AP from savings.
-                gainedAP = 0;
+                const leftover = Math.max(0, Math.floor(currentState.config.dailyBudget - yesterSpent));
+                const targetGoal = currentState.goals.find(g => !g.isCompleted);
+                if (leftover > 0 && !targetGoal) {
+                    goalToastMsg = `昨日结余 ${currentState.config.currencySymbol}${leftover} 无处安放——设一个储蓄心愿，它就会自动攒起来`;
+                }
+                if (leftover > 0 && targetGoal) {
+                    updatedGoals = currentState.goals.map(g => {
+                        if (g.id !== targetGoal.id) return g;
+                        const newAmount = Math.min(g.targetAmount, g.currentAmount + leftover);
+                        const completed = newAmount >= g.targetAmount;
+                        if (completed) {
+                            goalToastMsg = `🎉 心愿「${g.name}」达成！店里今晚为你加播庆功戏！`;
+                        } else {
+                            goalToastMsg = `昨日结余 ${currentState.config.currencySymbol}${leftover} 已存入心愿「${g.name}」`;
+                        }
+                        return { ...g, currentAmount: newAmount, isCompleted: completed };
+                    });
+                }
             }
-
-            // Daily Login Bonus
-            const dailyBonus = 10;
-            const totalNewAP = gainedAP + dailyBonus;
 
             // Recover Fatigue
             const updatedStaff = currentState.shop.staff.map(s => ({
@@ -269,16 +310,16 @@ const BankApp: React.FC = () => {
                 ...currentState,
                 todaySpent: 0,
                 lastLoginDate: today,
+                goals: updatedGoals,
                 shop: {
                     ...currentState.shop,
-                    actionPoints: (currentState.shop.actionPoints || 0) + totalNewAP,
                     staff: updatedStaff,
                     activeVisitor: undefined
                 }
             };
 
             await DB.saveBankState(currentState);
-            addToast(`新的一天！获得 ${totalNewAP} AP (预算结余: ${gainedAP})`, 'success');
+            addToast(goalToastMsg || '新的一天，店门开了。记账攒好今晚的戏！', 'success');
         }
 
         const todayTx = txs.filter(t => t.dateStr === today);
@@ -288,7 +329,9 @@ const BankApp: React.FC = () => {
         const finalState = { ...currentState, todaySpent: spent, shop: { ...currentState.shop, appeal } };
         stateRef.current = finalState;
         setState(finalState);
-        setTransactions(txs.sort((a,b) => b.timestamp - a.timestamp));
+        const sortedTxs = txs.sort((a,b) => b.timestamp - a.timestamp);
+        transactionsRef.current = sortedTxs;
+        setTransactions(sortedTxs);
 
         // Always persist after load to ensure migrations are saved
         await DB.saveBankState(finalState);
@@ -307,7 +350,7 @@ const BankApp: React.FC = () => {
         }
         
         const amount = parseFloat(txAmount);
-        const today = new Date().toISOString().split('T')[0];
+        const today = todayStr();
         
         const newTx: BankTransaction = {
             id: `tx-${Date.now()}`,
@@ -327,16 +370,21 @@ const BankApp: React.FC = () => {
         setState(newState);
         await DB.saveBankState(newState);
 
-        setTransactions(prev => [newTx, ...prev]);
+        transactionsRef.current = [newTx, ...transactionsRef.current];
+        setTransactions(transactionsRef.current);
 
         setShowAddTxModal(false);
         setTxAmount('');
         setTxNote('');
 
-        if (newSpent > cur.config.dailyBudget) {
-            addToast('⚠️ 警报：今日预算已超支！明天可能没有 AP 了...', 'info');
+        // 记账即事件：白天的小票，晚上的剧本（用 ref 读最新流水，避免 React 状态闭包滞后）
+        const todayTx = transactionsRef.current.filter(t => t.dateStr === today);
+        const wSpend = weightedSpend(todayTx);
+        const ratio = cur.config.dailyBudget > 0 ? wSpend / cur.config.dailyBudget : 0;
+        if (ratio > 1.0) {
+            addToast(overspendForecast(ratio), 'info');
         } else {
-            addToast('记账成功', 'success');
+            addToast(txFlavor(txNote), 'success');
         }
     };
 
@@ -347,7 +395,7 @@ const BankApp: React.FC = () => {
 
         const cur = stateRef.current;
         let newSpent = cur.todaySpent;
-        const today = new Date().toISOString().split('T')[0];
+        const today = todayStr();
         if (tx.dateStr === today) {
             newSpent = Math.max(0, cur.todaySpent - tx.amount);
         }
@@ -356,20 +404,233 @@ const BankApp: React.FC = () => {
         stateRef.current = newState;
         setState(newState);
         await DB.saveBankState(newState);
-        setTransactions(prev => prev.filter(t => t.id !== id));
+        transactionsRef.current = transactionsRef.current.filter(t => t.id !== id);
+        setTransactions(transactionsRef.current);
         addToast('记录已删除', 'success');
+    };
+
+    // --- 今日开演：每日剧集生成 ---
+
+    /** 近 7 日（不含今日）有记账的日子的加权支出，用于进步分基线 */
+    const recentWeightedSpends = (txs: BankTransaction[], today: string): number[] => {
+        // 只看今天之前 14 天内的流水，避免全量历史扫描
+        const cutoff = new Date(Date.now() - 14 * 86400000).toISOString().split('T')[0];
+        const byDay: Record<string, BankTransaction[]> = {};
+        for (const t of txs) {
+            if (t.dateStr >= today || t.dateStr < cutoff) continue;
+            (byDay[t.dateStr] = byDay[t.dateStr] || []).push(t);
+        }
+        return Object.keys(byDay).sort().slice(-7).map(d => weightedSpend(byDay[d]));
+    };
+
+    /** 预报卡与开演共用同一条天气管线，保证"预报承诺的戏"就是"实际开演的戏" */
+    const computeTodayWeather = () => {
+        const today = todayStr();
+        const txs = transactionsRef.current;
+        const todayTx = txs.filter(t => t.dateStr === today);
+        const wr = computeWeather(todayTx, stateRef.current.config.dailyBudget, recentWeightedSpends(txs, today));
+        return { ...wr, todayTx, today };
+    };
+
+    /** 按当前账本实时预报今晚天气（开演前展示用） */
+    const getForecast = (): { weather: BankWeather; txCount: number } => {
+        const { weather, todayTx } = computeTodayWeather();
+        return { weather, txCount: todayTx.length };
+    };
+
+    // 同步防重入闸（isGeneratingEpisode 是异步 state，快速双击可穿透）
+    const episodeBusyRef = useRef(false);
+
+    const handleGenerateEpisode = async () => {
+        if (episodeBusyRef.current) return;
+        const cur = stateRef.current;
+        const { weather, energy, todayTx, today } = computeTodayWeather();
+
+        // 每天一集；例外：早上误开出雾天后补了账，可以"雾散重演"升级今天这集
+        const latest = cur.episodes?.[0];
+        const isFogUpgrade = cur.lastEpisodeDate === today
+            && latest?.date === today && latest.weather === 'fog' && todayTx.length > 0;
+        if (cur.lastEpisodeDate === today && !isFogUpgrade) {
+            addToast('今天的戏已经演过了，明天请早 🎫', 'info');
+            return;
+        }
+
+        episodeBusyRef.current = true;
+        setIsGeneratingEpisode(true);
+        try {
+            // 1. 掷宠物事件（关系数学在引擎里定死，LLM 只润色叙事）
+            const pets = cur.shop.staff.filter(s => s.isPet);
+            const events = rollPetEvents(pets, cur.petRelations || {}, weather);
+            const { relations, milestones } = applyEvents(cur.petRelations || {}, events);
+
+            // 2. streak / 金币 / 累计元气 / 等级
+            // 雾天升级重演：从雾集记录的开演前基线重算，避免降档后再 +1
+            const baseStreak = isFogUpgrade ? (latest!.prevStreak ?? cur.streak ?? 0) : (cur.streak || 0);
+            const streak = nextStreak(baseStreak, todayTx.length > 0);
+            const coins = computeCoins(weather, streak, cur.shop.appeal);
+            // 升级重演只补差额（雾集已发过少量金币）
+            const coinsDelta = isFogUpgrade ? Math.max(0, coins - (latest!.coinsEarned || 0)) : coins;
+            const cumulativeEnergy = (cur.cumulativeEnergy || 0) + (energy || 0);
+            const newLevel = levelForEnergy(cumulativeEnergy);
+            const leveledUp = newLevel > (cur.shop.shopLevel || 1);
+
+            // 3. 疲劳：剧情驱动——暴风雨全员 +10，打架双方 +15
+            const fatigueDelta: Record<string, number> = {};
+            if (weather === 'storm') {
+                for (const s of cur.shop.staff) fatigueDelta[s.id] = (fatigueDelta[s.id] || 0) + 10;
+            }
+            for (const ev of events) {
+                if (ev.type === 'fight') {
+                    fatigueDelta[ev.aId] = (fatigueDelta[ev.aId] || 0) + 15;
+                    if (ev.bId) fatigueDelta[ev.bId] = (fatigueDelta[ev.bId] || 0) + 15;
+                }
+            }
+            const updatedStaff = cur.shop.staff.map(s => fatigueDelta[s.id]
+                ? { ...s, fatigue: Math.min(s.maxFatigue, s.fatigue + fatigueDelta[s.id]) }
+                : s
+            );
+
+            // 4. 剧本：本地骨架保底，LLM 可用时润色（雾天不烧 token）
+            const rawSpent = todayTx.reduce((sum, t) => sum + t.amount, 0);
+            const savedToday = weather === 'fog' ? 0 : Math.max(0, Math.floor(cur.config.dailyBudget - rawSpent));
+            const goalName = cur.goals.find(g => !g.isCompleted)?.name;
+            const dayIndex = isFogUpgrade ? latest!.dayIndex : (cur.episodes?.[0]?.dayIndex || 0) + 1;
+            const draftParams = {
+                shopName: cur.shop.shopName, weather, energy, dayIndex,
+                events, milestones,
+                txNotes: todayTx.slice(0, 3).map(t => t.note),
+                savedToday, currency: cur.config.currencySymbol, goalName,
+            };
+            let { title, body } = composeLocalEpisode(draftParams);
+            let generatedBy: BankEpisode['generatedBy'] = 'local';
+
+            if (apiConfig.apiKey && weather !== 'fog') {
+                try {
+                    const relationLines = pets.length >= 2
+                        ? pets.flatMap((a, i) => pets.slice(i + 1).map(b => {
+                            const v = relations[[a.id, b.id].sort().join('|')] ?? 0;
+                            return `${a.name} × ${b.name}: 关系值 ${v}`;
+                        })).join('\n')
+                        : '（店里宠物不足两只）';
+                    const prompt = `你是一档宠物咖啡馆日常剧的编剧。写今天这一集（150-300字，中文，轻松治愈系，可以搞笑）。
+
+## 舞台
+店名「${cur.shop.shopName}」。今日天气「${WEATHER_META[weather].label}」，戏路要求：${WEATHER_META[weather].tone}。
+
+## 今天必须发生的事件（顺序可调，细节可扩写，但事实不能改）
+${events.map((e, i) => `${i + 1}. ${e.text}`).join('\n') || '（无宠物事件，写店里的日常）'}
+${milestones.length ? '\n## 本集大事件（必须写成高潮）\n' + milestones.join('\n') : ''}
+
+## 道具（把这些真实消费自然编进剧情）
+${todayTx.slice(0, 3).map(t => `${t.note}（${cur.config.currencySymbol}${t.amount}）`).join('、') || '（今日无消费记录）'}
+${savedToday > 0 ? `\n结尾提一句：今日结余 ${cur.config.currencySymbol}${savedToday}${goalName ? `，存进了心愿「${goalName}」` : ''}。` : ''}
+
+## 宠物关系（写作参考）
+${relationLines}
+
+## 红线
+- 暧昧情节一律萌向拟人（分零食/尾巴缠一起/看月亮），全年龄向。
+- 只输出 JSON：{"title": "第 ${dayIndex} 集 · 四到八字标题", "body": "正文"}`;
+
+                    const data = await safeFetchJson(
+                        `${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`,
+                        {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` },
+                            body: JSON.stringify({ model: apiConfig.model, messages: [{ role: 'user', content: prompt }] })
+                        },
+                        2, 60000,
+                        { appId: 'bank', appName: '存钱罐', purpose: '今日开演剧集' },
+                    );
+                    const parsed = extractJson(data?.choices?.[0]?.message?.content || '');
+                    if (parsed?.title && parsed?.body) {
+                        title = parsed.title;
+                        body = parsed.body;
+                        generatedBy = 'llm';
+                    }
+                } catch (e) {
+                    console.warn('Episode LLM generation failed, falling back to local script', e);
+                }
+            }
+
+            const episode: BankEpisode = {
+                id: `ep-${Date.now()}`,
+                date: today, dayIndex, weather, energy,
+                title, body, events, coinsEarned: coins,
+                generatedBy, timestamp: Date.now(),
+                prevStreak: baseStreak,
+            };
+
+            // 5. 主人反应：涉及有主宠物的事件 → 写系统消息进主人聊天（每角色每天最多 1 条）
+            const notifiedChars = new Set<string>();
+            const ownerMessages: { charId: string; content: string }[] = [];
+            for (const ev of events) {
+                const involved = [ev.aId, ev.bId].filter(Boolean) as string[];
+                for (const petId of involved) {
+                    const petStaff = pets.find(p => p.id === petId);
+                    const ownerId = petStaff?.ownerCharId;
+                    if (!ownerId || notifiedChars.has(ownerId)) continue;
+                    if (!characters.find(c => c.id === ownerId)) continue;
+                    notifiedChars.add(ownerId);
+                    const note = ev.aId === petId
+                        ? ev.ownerNote
+                        : `被卷进了${ev.aName}的风波：${ev.text}`;
+                    ownerMessages.push({
+                        charId: ownerId,
+                        content: `[系统: 你寄养在${userProfile.name}咖啡馆的宠物「${petStaff!.name}」今天${note}]`,
+                    });
+                }
+            }
+            await Promise.all(ownerMessages.map(m =>
+                DB.saveMessage({ charId: m.charId, role: 'system', type: 'text', content: m.content })
+                    .catch(e => console.error('Failed to push pet owner system message', e))
+            ));
+
+            await persistStateUpdate(prev => ({
+                ...prev,
+                petRelations: relations,
+                streak,
+                cumulativeEnergy,
+                episodes: isFogUpgrade
+                    ? [episode, ...(prev.episodes || []).slice(1)].slice(0, 30)
+                    : [episode, ...(prev.episodes || [])].slice(0, 30),
+                lastEpisodeDate: today,
+                shop: {
+                    ...prev.shop,
+                    actionPoints: prev.shop.actionPoints + coinsDelta,
+                    staff: updatedStaff,
+                    shopLevel: newLevel,
+                },
+            }));
+
+            if (leveledUp) {
+                addToast(`🏆 店铺升级！现在是「${levelTitle(newLevel)}」`, 'success');
+            }
+            addToast(
+                isFogUpgrade
+                    ? `${WEATHER_META[weather].emoji} 雾散了！第 ${dayIndex} 集重新上演 +${coinsDelta} 金币`
+                    : `${WEATHER_META[weather].emoji} 第 ${dayIndex} 集上演！+${coins} 金币`,
+                'success'
+            );
+        } catch (e: any) {
+            console.error(e);
+            addToast('开演失败: ' + e.message, 'error');
+        } finally {
+            episodeBusyRef.current = false;
+            setIsGeneratingEpisode(false);
+        }
     };
 
     // --- Game Logic ---
 
-    const consumeAP = async (cost: number): Promise<boolean> => {
+    const spendCoins = async (cost: number): Promise<boolean> => {
         const cur = stateRef.current;
         if (cur.shop.actionPoints < cost) {
-            addToast(`AP 不足 (需 ${cost})。去省钱吧！`, 'error');
+            addToast(`金币不足 (需 ${cost} 🪙)。今晚记得开演赚金币！`, 'error');
             return false;
         }
-        const newAP = cur.shop.actionPoints - cost;
-        const newState = { ...cur, shop: { ...cur.shop, actionPoints: newAP } };
+        const newCoins = cur.shop.actionPoints - cost;
+        const newState = { ...cur, shop: { ...cur.shop, actionPoints: newCoins } };
         stateRef.current = newState;
         setState(newState);
         await DB.saveBankState(newState);
@@ -377,8 +638,8 @@ const BankApp: React.FC = () => {
     };
 
     const handleStaffRest = async (staffId: string) => {
-        const COST = 20;
-        if (!(await consumeAP(COST))) return;
+        const COST = BANK_PRICES.staffRest;
+        if (!(await spendCoins(COST))) return;
 
         const cur = stateRef.current;
         const updatedStaff = cur.shop.staff.map(s =>
@@ -393,7 +654,7 @@ const BankApp: React.FC = () => {
     };
 
     const handleUnlockRecipe = async (recipeId: string, cost: number) => {
-        if (!(await consumeAP(cost))) return;
+        if (!(await spendCoins(cost))) return;
 
         const cur = stateRef.current;
         const newUnlocked = [...cur.shop.unlockedRecipes, recipeId];
@@ -470,7 +731,7 @@ const BankApp: React.FC = () => {
     };
 
     const handleHireStaff = async (newStaff: ShopStaff, cost: number) => {
-        if (!(await consumeAP(cost))) return;
+        if (!(await spendCoins(cost))) return;
 
         const cur = stateRef.current;
         const randomX = 20 + Math.random() * 60;
@@ -495,9 +756,9 @@ const BankApp: React.FC = () => {
 
     // --- Guestbook Logic (Gossip & Drama) ---
     const handleRefreshGuestbook = async () => {
-        const COST = 40;
+        const COST = BANK_PRICES.guestbookRefresh;
         if (stateRef.current.shop.actionPoints < COST) {
-            addToast(`AP 不足 (需 ${COST})。去省钱吧！`, 'error');
+            addToast(`金币不足 (需 ${COST} 🪙)。今晚记得开演赚金币！`, 'error');
             return;
         }
         if (!apiConfig.apiKey) { addToast('需配置 API Key', 'error'); return; }
@@ -682,20 +943,6 @@ ${previousGuestbook}
         }
     };
 
-    const handleMoveStaff = async (x: number, y: number) => {
-        const cur = stateRef.current;
-        const manager = cur.shop.staff[0];
-        if (!manager) return;
-
-        const updatedManager = { ...manager, x, y };
-        const updatedStaffList = [updatedManager, ...cur.shop.staff.slice(1)];
-
-        const newState = { ...cur, shop: { ...cur.shop, staff: updatedStaffList } };
-        stateRef.current = newState;
-        setState(newState);
-        await DB.saveBankState(newState);
-    };
-
     const handleConfigUpdate = async (updates: Partial<typeof state.config>) => {
         const cur = stateRef.current;
         const normalizedUpdates = { ...updates };
@@ -737,6 +984,8 @@ ${previousGuestbook}
         addToast('心愿已添加', 'success');
     };
 
+    const playedToday = state.lastEpisodeDate === todayStr();
+
     return (
         <div className="h-full w-full flex flex-col font-sans relative overflow-hidden" style={{ background: 'linear-gradient(180deg, #FDF6E3 0%, #FFF8E1 100%)' }}>
 
@@ -754,8 +1003,13 @@ ${previousGuestbook}
                         <div className="flex flex-col">
                             <span className="font-bold text-[10px] text-white/60 uppercase tracking-widest">☕ Coffee Tycoon</span>
                             <div className="flex items-center gap-2">
+                                <span className="text-sm leading-none">🪙</span>
                                 <span className="font-black text-lg text-[#FFE0B2] leading-none">{state.shop.actionPoints}</span>
-                                <span className="text-[10px] text-white/50 font-medium">AP</span>
+                                {playedToday && state.episodes?.[0] && (
+                                    <span className="text-xs leading-none" title={`今日 ${WEATHER_META[state.episodes[0].weather].label}`}>
+                                        {WEATHER_META[state.episodes[0].weather].emoji}
+                                    </span>
+                                )}
                             </div>
                         </div>
                     </div>
@@ -766,6 +1020,17 @@ ${previousGuestbook}
                             className="w-9 h-9 rounded-xl bg-white/10 text-white/80 flex items-center justify-center hover:bg-white/20 active:scale-95 transition-all text-sm font-bold"
                         >
                             ?
+                        </button>
+                        <button
+                            onClick={() => setShowEpisode(true)}
+                            className={`flex items-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-bold shadow-lg hover:shadow-xl active:scale-95 transition-all ${
+                                playedToday
+                                    ? 'bg-white/15 text-white/90'
+                                    : 'bg-gradient-to-r from-[#7E57C2] to-[#5E35B1] text-white animate-pulse'
+                            }`}
+                        >
+                            <FilmSlate size={14} weight="fill" />
+                            <span>开演</span>
                         </button>
                         <button
                             onClick={() => setShowAddTxModal(true)}
@@ -813,7 +1078,7 @@ ${previousGuestbook}
                         <div className="bg-[#fdf6e3] p-4 rounded-xl border-2 border-[#d3cbb8] mb-4 flex justify-between items-center shadow-sm">
                             <div>
                                 <h3 className="text-sm font-bold text-[#586e75]">每日预算设定</h3>
-                                <p className="text-[10px] text-[#93a1a1]">省下的钱 = 明天的 AP</p>
+                                <p className="text-[10px] text-[#93a1a1]">省得越有分寸，今晚的戏越晴朗</p>
                             </div>
                             <div className="flex items-center gap-1 bg-white px-2 py-1 rounded-lg border border-slate-200">
                                 <span className="text-xs text-slate-400">{state.config.currencySymbol}</span>
@@ -867,6 +1132,18 @@ ${previousGuestbook}
                 )}
             </div>
 
+            {/* 今日开演 Overlay */}
+            {showEpisode && (
+                <BankEpisodeOverlay
+                    episodes={state.episodes || []}
+                    playedToday={playedToday}
+                    isGenerating={isGeneratingEpisode}
+                    forecast={getForecast()}
+                    onGenerate={handleGenerateEpisode}
+                    onClose={() => setShowEpisode(false)}
+                />
+            )}
+
             {/* Premium Guestbook Overlay */}
             {showGuestbook && (
                 <div className="absolute inset-0 z-[100] flex flex-col animate-slide-up" style={{ background: 'linear-gradient(180deg, #FDF6E3 0%, #FFF8E1 100%)' }}>
@@ -903,7 +1180,7 @@ ${previousGuestbook}
                                 </div>
                                 <div>
                                     <h3 className="font-bold text-[#5D4037] text-sm">打听消息</h3>
-                                    <p className="text-[10px] text-[#A1887F] mt-0.5">消耗 AP 让大家聊聊八卦</p>
+                                    <p className="text-[10px] text-[#A1887F] mt-0.5">花点金币让大家聊聊八卦</p>
                                 </div>
                             </div>
                             <button
@@ -920,7 +1197,7 @@ ${previousGuestbook}
                                         <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
                                         偷听中...
                                     </span>
-                                ) : '刷新情报 · 40 AP'}
+                                ) : `刷新情报 · ${BANK_PRICES.guestbookRefresh} 🪙`}
                             </button>
                         </div>
 
@@ -1132,15 +1409,22 @@ ${previousGuestbook}
                     <div className="flex gap-4 p-4 bg-gradient-to-r from-[#FFF8E1] to-[#FFF3E0] rounded-2xl">
                         <div className="w-12 h-12 bg-gradient-to-br from-[#FFD54F] to-[#FFB300] rounded-xl flex items-center justify-center text-2xl shadow-md shrink-0"><Coin size={24} weight="fill" className="text-white" /></div>
                         <div>
-                            <div className="font-bold text-base mb-1">省钱 = 能量 (AP)</div>
-                            <p className="text-xs text-[#8D6E63] leading-relaxed">设定每日预算。如果这天花得比预算少，结余的钱就会变成第二天的行动点数 (AP)。</p>
+                            <div className="font-bold text-base mb-1">省钱 = 天气</div>
+                            <p className="text-xs text-[#8D6E63] leading-relaxed">设定每日预算并记账。花得越有分寸，今天的天气越晴朗（☀️→⛈ 五档）。必要开销（房租/看病）按轻权重计算——房租和奶茶不同罪。一整天不记账则是🌫雾天，你会错过整集剧情。</p>
+                        </div>
+                    </div>
+                    <div className="flex gap-4 p-4 bg-gradient-to-r from-[#EDE7F6] to-[#D1C4E9] rounded-2xl">
+                        <div className="w-12 h-12 bg-gradient-to-br from-[#7E57C2] to-[#5E35B1] rounded-xl flex items-center justify-center text-2xl shadow-md shrink-0"><FilmSlate size={24} weight="fill" className="text-white" /></div>
+                        <div>
+                            <div className="font-bold text-base mb-1">今日开演</div>
+                            <p className="text-xs text-[#6D4C41] leading-relaxed">每天按一次「开演」，看店里宠物们的今日剧集：打架、抢食、结伴打盹、甚至暧昧…天气决定戏路，白天记的账会变成剧情道具。剧集产出金币 🪙。</p>
                         </div>
                     </div>
                     <div className="flex gap-4 p-4 bg-gradient-to-r from-[#EFEBE9] to-[#D7CCC8] rounded-2xl">
                         <div className="w-12 h-12 bg-gradient-to-br from-[#8D6E63] to-[#6D4C41] rounded-xl flex items-center justify-center text-2xl shadow-md shrink-0"><Coffee size={24} weight="fill" className="text-white" /></div>
                         <div>
-                            <div className="font-bold text-base mb-1">经营店铺</div>
-                            <p className="text-xs text-[#8D6E63] leading-relaxed">消耗 AP 来解锁食谱、雇佣员工、举办活动。店铺越高级，吸引的访客越多。</p>
+                            <div className="font-bold text-base mb-1">金币经营</div>
+                            <p className="text-xs text-[#8D6E63] leading-relaxed">金币是唯一货币：雇员工、领养宠物、解锁食谱和房间、装饰店铺。宠物有主人的话，它们的动静会传到主人耳朵里——两只宠物处出感情时，两位主人都会知道。</p>
                         </div>
                     </div>
                     <div className="flex gap-4 p-4 bg-gradient-to-r from-[#E3F2FD] to-[#BBDEFB] rounded-2xl">
@@ -1148,9 +1432,9 @@ ${previousGuestbook}
                         <div>
                             <div className="font-bold text-base mb-1">互动操作</div>
                             <p className="text-xs text-[#5C6BC0] leading-relaxed">
-                                • 点击情报志可查看和刷新八卦<br/>
-                                • 点击地板可以让店长走过去<br/>
-                                • 点击🛎️按钮邀请角色进店
+                                • 连续记账有金币加成（漏一天只降档不清零）<br/>
+                                • 昨日预算结余自动存进你的储蓄心愿<br/>
+                                • 点击情报志可查看和刷新八卦
                             </p>
                         </div>
                     </div>

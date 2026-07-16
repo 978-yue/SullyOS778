@@ -1,8 +1,9 @@
 
 import React, { useState, useRef } from 'react';
 import { BankFullState, ShopStaff, CharacterProfile } from '../../types';
-import { SHOP_RECIPES, AVAILABLE_STAFF } from './BankGameConstants';
+import { SHOP_RECIPES, AVAILABLE_STAFF, BANK_PRICES } from './BankGameConstants';
 import BankAssetIcon from './BankAssetIcon';
+import { relationTier, pairKey } from '../../utils/bank/narrative';
 import { processImage } from '../../utils/file';
 import { UsersThree, Target, Sparkle, PawPrint, Link as LinkIcon, Camera, Check, Lightbulb, Confetti, Briefcase, CookingPot, HandWaving, Dog, Cat, Rabbit } from '@phosphor-icons/react';
 
@@ -79,7 +80,7 @@ const BankGameMenu: React.FC<Props> = ({
             }
         }
 
-        onHireStaff(newStaff, isPetMode ? 150 : 200);
+        onHireStaff(newStaff, isPetMode ? BANK_PRICES.adoptPet : BANK_PRICES.hireStaff);
         setShowCustomHire(false);
         setCustomName('');
         setCustomAvatar('https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f43e.png');
@@ -152,6 +153,23 @@ const BankGameMenu: React.FC<Props> = ({
                                                         ></div>
                                                     </div>
                                                 </div>
+                                                {/* 宠物关系徽章 */}
+                                                {s.isPet && (() => {
+                                                    const others = state.shop.staff.filter(o => o.isPet && o.id !== s.id);
+                                                    if (others.length === 0) return null;
+                                                    return (
+                                                        <div className="mt-1.5 flex flex-wrap gap-1">
+                                                            {others.slice(0, 3).map(o => {
+                                                                const tier = relationTier((state.petRelations || {})[pairKey(s.id, o.id)] ?? 0);
+                                                                return (
+                                                                    <span key={o.id} className="text-[8px] font-bold text-[#8D6E63] bg-[#FDF6E3] border border-[#E8DCC8] px-1.5 py-0.5 rounded-full">
+                                                                        与{o.name}：{tier.label} {tier.emoji}
+                                                                    </span>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    );
+                                                })()}
                                             </div>
                                         </div>
                                         <div className="flex items-center gap-2">
@@ -346,7 +364,7 @@ const BankGameMenu: React.FC<Props> = ({
                                                 : 'bg-gradient-to-r from-[#42A5F5] to-[#1E88E5] text-white hover:shadow-lg active:scale-95'
                                         }`}
                                     >
-                                        {isPetMode ? '领养 · 150 AP' : '雇佣 · 200 AP'}
+                                        {isPetMode ? `领养 · ${BANK_PRICES.adoptPet} 🪙` : `雇佣 · ${BANK_PRICES.hireStaff} 🪙`}
                                     </button>
                                 </div>
 
@@ -379,10 +397,10 @@ const BankGameMenu: React.FC<Props> = ({
                                         </div>
                                     </div>
                                     <button
-                                        onClick={() => onHireStaff({ ...s, id: `staff-${Date.now()}`, fatigue: 0, hireDate: Date.now() }, 200)}
+                                        onClick={() => onHireStaff({ ...s, id: `staff-${Date.now()}`, fatigue: 0, hireDate: Date.now() }, BANK_PRICES.hireStaff)}
                                         className="bg-gradient-to-r from-[#FF8A65] to-[#FF7043] text-white px-4 py-2 rounded-xl text-xs font-bold shadow-md hover:shadow-lg active:scale-95 transition-all"
                                     >
-                                        雇佣 · 200 AP
+                                        雇佣 · {BANK_PRICES.hireStaff} 🪙
                                     </button>
                                 </div>
                             ))}

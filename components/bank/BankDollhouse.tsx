@@ -15,9 +15,9 @@ import { Armchair, PaintBucket, SquaresFour, Image as ImageIcon, HouseSimple, Pe
 
 const ROOM_UNLOCK_COSTS: Record<string, number> = {
     'room-1f-left': 0,
-    'room-1f-right': 120,
-    'room-2f-left': 200,
-    'room-2f-right': 300,
+    'room-1f-right': 60,
+    'room-2f-left': 100,
+    'room-2f-right': 150,
 };
 
 const MAIN_ROOM_ID = 'room-1f-left';
@@ -287,7 +287,7 @@ const BankDollhouse: React.FC<Props> = ({
     const handleUnlockRoom = async (roomId: string) => {
         const cost = ROOM_UNLOCK_COSTS[roomId] || 150;
         if (shopState.actionPoints < cost) {
-            addToast(`AP 不足 (需 ${cost})`, 'error');
+            addToast(`金币不足 (需 ${cost} 🪙)`, 'error');
             return;
         }
         // Save dollhouse changes separately from AP deduction
@@ -308,7 +308,7 @@ const BankDollhouse: React.FC<Props> = ({
             actionPoints: prev.actionPoints - cost,
         }));
         setShowUnlockConfirm(null);
-        addToast(`房间已解锁！-${cost} AP`, 'success');
+        addToast(`房间已解锁！-${cost} 🪙`, 'success');
     };
 
     const handleRenameRoom = (room: DollhouseRoom) => {
@@ -549,7 +549,7 @@ const BankDollhouse: React.FC<Props> = ({
         const layout = getLayout(layoutId);
         if (!layout) return;
         if (layout.apCost > 0 && shopState.actionPoints < layout.apCost) {
-            addToast(`AP 不足 (需 ${layout.apCost})`, 'error');
+            addToast(`金币不足 (需 ${layout.apCost} 🪙)`, 'error');
             return;
         }
         // Save dollhouse changes separately from AP deduction
@@ -984,7 +984,7 @@ const BankDollhouse: React.FC<Props> = ({
                         >
                             <div className="bg-white/90 backdrop-blur-sm px-5 py-4 rounded-2xl shadow-lg text-center">
                                 <div className="text-2xl mb-1">🔒</div>
-                                <div className="text-sm font-bold text-[#8A5A3D]">解锁 {ROOM_UNLOCK_COSTS[room.id] || 150} AP</div>
+                                <div className="text-sm font-bold text-[#8A5A3D]">解锁 {ROOM_UNLOCK_COSTS[room.id] || 150} 🪙</div>
                             </div>
                         </button>
                     )}
@@ -1198,7 +1198,7 @@ const BankDollhouse: React.FC<Props> = ({
                                                 <div className={`text-[10px] font-bold px-2 py-1 rounded-lg ${
                                                     isActive ? 'bg-[#FF8E6B] text-white' : layout.apCost > 0 ? 'bg-[#FFF4E8] text-[#C4956A]' : 'bg-[#E8F5E9] text-[#4CAF50]'
                                                 }`}>
-                                                    {isActive ? '当前' : layout.apCost > 0 ? `${layout.apCost} AP` : '免费'}
+                                                    {isActive ? '当前' : layout.apCost > 0 ? `${layout.apCost} 🪙` : '免费'}
                                                 </div>
                                             </button>
                                         );
@@ -1650,7 +1650,7 @@ const BankDollhouse: React.FC<Props> = ({
                             <div className="text-center mb-4">
                                 <div className="text-3xl mb-2">🔓</div>
                                 <div className="text-sm font-bold text-[#6B4528]">解锁「{room?.name || '房间'}」</div>
-                                <div className="text-xs text-[#B8956E] mt-1">需要消耗 {cost} AP</div>
+                                <div className="text-xs text-[#B8956E] mt-1">需要消耗 {cost} 🪙</div>
                             </div>
                             <div className="flex gap-2">
                                 <button

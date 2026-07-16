@@ -2,6 +2,7 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { BankTransaction, SavingsGoal, APIConfig } from '../../types';
 import { safeResponseJson } from '../../utils/safeApi';
+import { guessCategory } from '../../utils/bank/narrative';
 
 interface Props {
     transactions: BankTransaction[];
@@ -101,18 +102,7 @@ const BankAnalytics: React.FC<Props> = ({ transactions, goals, currency, onDelet
             .sort((a, b) => b.total - a.total);
     }, [filteredTx, categorizedTx, totalSpent]);
 
-    // Simple keyword-based category guessing
-    function guessCategory(note: string): string {
-        const lower = note.toLowerCase();
-        if (/饭|餐|吃|外卖|食|奶茶|咖啡|早|午|晚|火锅|烧烤|面|饮/.test(lower)) return 'food';
-        if (/车|地铁|公交|打车|油|加油|停车|出租/.test(lower)) return 'transport';
-        if (/买|购|淘宝|京东|拼多多|商场|超市|衣服/.test(lower)) return 'shopping';
-        if (/游戏|电影|娱乐|ktv|酒吧|玩/.test(lower)) return 'entertainment';
-        if (/话费|水电|房租|网费|会员|订阅/.test(lower)) return 'bills';
-        if (/医|药|健康|体检|看病/.test(lower)) return 'health';
-        if (/书|课|学习|培训|教育/.test(lower)) return 'education';
-        return 'other';
-    }
+    // 分类猜测已抽到 utils/bank/narrative.ts（与元气天气引擎共用同一套权重口径）
 
     // AI categorization and summary
     const analyzeWithAI = async () => {

@@ -1950,6 +1950,7 @@ export interface DollhouseState {
 }
 
 export interface BankShopState {
+    /** v3 起存储的是金币（历史字段名保留以免迁移出错）：唯一可花货币，产自「今日开演」 */
     actionPoints: number;
     shopName: string;
     shopLevel: number;
@@ -1971,6 +1972,39 @@ export interface BankShopState {
     dollhouse?: DollhouseState;
 }
 
+/** 每日天气档位：由「省钱尽力程度」比值评定，决定当天宠物剧集的戏路 */
+export type BankWeather = 'sunny' | 'fair' | 'cloudy' | 'rain' | 'storm' | 'fog';
+
+/** 宠物剧集中的单个宠物事件 */
+export interface BankPetEvent {
+    type: 'fight' | 'steal' | 'nap' | 'share' | 'crush' | 'solo';
+    aId: string;
+    aName: string;
+    bId?: string;
+    bName?: string;
+    text: string;
+    relationDelta: number;
+    /** 写回主人聊天的系统消息摘要（无主宠物为空） */
+    ownerNote?: string;
+}
+
+/** 「今日开演」产出的一集宠物剧 */
+export interface BankEpisode {
+    id: string;
+    date: string;        // YYYY-MM-DD
+    dayIndex: number;    // 第 N 集
+    weather: BankWeather;
+    energy: number | null;   // 雾天不评分为 null
+    title: string;
+    body: string;
+    events: BankPetEvent[];
+    coinsEarned: number;
+    generatedBy: 'llm' | 'local';
+    timestamp: number;
+    /** 开演前的 streak 值（雾天升级重演时用于恢复正确的连击基线） */
+    prevStreak?: number;
+}
+
 export interface BankFullState {
     config: BankConfig;
     shop: BankShopState;
@@ -1979,6 +2013,17 @@ export interface BankFullState {
     todaySpent: number;
     lastLoginDate: string;
     dataVersion?: number; // Migration version tracker (undefined = v0/v1 legacy)
+    // --- v3: 元气天气 + 宠物剧集系统 ---
+    /** 宠物两两关系值 (-100~100)，key 为排序后的 "idA|idB" */
+    petRelations?: Record<string, number>;
+    /** 记账连击天数（宽容制：雾天降档不清零） */
+    streak?: number;
+    /** 累计元气总分，驱动 shopLevel */
+    cumulativeEnergy?: number;
+    /** 剧集存档（最新在前，最多保留 30 集） */
+    episodes?: BankEpisode[];
+    /** 最近一次开演的日期 YYYY-MM-DD（每天一集） */
+    lastEpisodeDate?: string;
 }
 // ---------------------------------
 
