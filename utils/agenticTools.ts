@@ -531,6 +531,7 @@ export async function runXhsDetail(
             }
 
             const normalizedComments = normalizeXhsComments(d);
+            const commentsError = (d as any).data?.comments_error || (d as any).comments_error;
             if (ctx.xhsCaches) {
                 const caches = ctx.xhsCaches;
                 const cacheComments = (comments: ReturnType<typeof normalizeXhsComments>) => {
@@ -546,8 +547,10 @@ export async function runXhsDetail(
                 if (normalizedComments.length > 0) {
                     cacheComments(normalizedComments);
                     console.log(`📕 [XHS] 缓存了 ${caches.commentUserIdCache.size} 条评论的 userId, ${caches.commentAuthorNameCache.size} 条 authorName`);
+                } else if (commentsError) {
+                    console.warn(`📕 [XHS] 评论区读取失败（笔记详情仍正常）:`, commentsError);
                 } else {
-                    console.warn(`📕 [XHS] 未找到评论数组, d keys:`, Object.keys(d as any), 'd.note keys:', (d as any).note ? Object.keys((d as any).note) : 'N/A');
+                    console.log(`📕 [XHS] 评论数组为空`);
                 }
             }
 
@@ -606,6 +609,7 @@ export async function runXhsDetail(
                 noteSection += `\n\n正文:\n${noteDesc}`;
 
                 const commentArr = normalizeXhsComments(detailData);
+                const commentsError = innerData?.comments_error || (detailData as any).comments_error;
 
                 let commentsSection = '';
                 if (commentArr.length > 0) {
@@ -620,6 +624,11 @@ export async function runXhsDetail(
                     };
                     commentsSection = `\n\n💬 评论区 (${commentArr.length}条):\n` +
                         commentArr.slice(0, 30).map((c: any) => formatComment(c)).join('\n');
+                } else if (commentsError) {
+                    const errorMessage = typeof commentsError === 'string'
+                        ? commentsError
+                        : commentsError.message || commentsError.msg || JSON.stringify(commentsError);
+                    commentsSection = `\n\n💬 评论区读取失败（笔记详情仍正常）: ${errorMessage}`;
                 } else {
                     commentsSection = '\n\n💬 评论区: （暂无评论）';
                 }

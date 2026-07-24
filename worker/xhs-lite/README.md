@@ -20,8 +20,13 @@ cookie 存在本地，每次请求经 `X-Xhs-Cookie` 头发给 Worker；Worker �
 
 ## 原理
 
-- `x-s` / `x-s-common` / `x-t`：纯数学算法，移植自
+- 搜索、详情和登录检查的 `x-s` / `x-s-common` / `x-t`：纯数学算法，移植自
   [Cloxl/xhshow](https://github.com/Cloxl/xhshow)（MIT），无 eval / 无 DOM。
+- 评论读取单独使用固定版本的
+  [cv-cat/Spider_XHS](https://github.com/cv-cat/Spider_XHS) 4.3.2 签名器，并只在
+  Worker 启动阶段编译一次。这样不会把评论接口的新签名扩散到搜索、详情或登录状态判断。
+  Cloudflare Worker 的 compatibility date 需为 `2025-06-01` 或更新；旧日期需显式启用
+  `allow_eval_during_startup`。
 - 图片上传签名 `getSignature`：HMAC-SHA1 + SHA1（来自 Spider_XHS），用 Web Crypto 实现。
 - 发帖带图：Worker `fetch` 图床/CDN 图片字节 → 算上传签名 → `PUT` 到小红书 ROS →
   拿 `file_id` 发帖。
@@ -37,6 +42,8 @@ pip install pycryptodome
 cd worker/xhs-lite/test
 PYTHONPATH=/tmp/xhshow/src python3 oracle.py > vectors.json
 node verify.mjs   # 期望 10 passed, 0 failed —— 直接测 worker/index.js 内嵌实现
+node comment-signer-smoke.mjs
+node comment-detail.integration.mjs
 ```
 
 | 文件 | 作用 |
@@ -45,3 +52,6 @@ node verify.mjs   # 期望 10 passed, 0 failed —— 直接测 worker/index.js 
 | `test/oracle.py` | Python 参考 oracle（确定性向量） |
 | `test/vectors.json` | 参考输出 |
 | `test/verify.mjs` | 导入 `worker/index.js` 内嵌实现并逐字节比对 |
+| `test/comment-signer-smoke.mjs` | 验证评论专用 4.3.2 签名器的头部格式 |
+| `test/comment-detail.integration.mjs` | 验证详情与评论合并、评论正文和楼中楼结构 |
+| `scripts/vendor-xhs-comment-signer.mjs` | 从固定 commit 校验并更新评论签名器 |
