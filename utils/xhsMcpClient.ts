@@ -488,13 +488,18 @@ export const XhsMcpClient = {
             : mcpCallTool(serverUrl, 'get_recommend');
     },
 
-    getNoteDetail: async (serverUrl: string, noteUrl: string, xsecToken?: string, options?: { loadAllComments?: boolean }): Promise<McpToolResult> => {
+    getNoteDetail: async (serverUrl: string, noteUrl: string, xsecToken?: string, options?: { loadAllComments?: boolean; xsecSource?: string }): Promise<McpToolResult> => {
         const feedId = extractNoteIdFromUrl(noteUrl);
         const token = xsecToken || extractXsecTokenFromUrl(noteUrl) || '';
+        let xsecSource = options?.xsecSource || 'pc_feed';
+        try {
+            xsecSource = new URL(noteUrl).searchParams.get('xsec_source') || xsecSource;
+        } catch { /* keep the share-link default */ }
 
         if (detectMode(serverUrl) === 'bridge') {
             return bridgePost(serverUrl, 'get-feed-detail', {
                 feed_id: feedId, xsec_token: token,
+                xsec_source: xsecSource,
                 load_all_comments: options?.loadAllComments || false,
                 click_more_replies: options?.loadAllComments || false,
             });
@@ -662,9 +667,7 @@ export const extractNotesFromMcpData = (data: any): any[] => {
 };
 
 export const parseXhsCount = (value: unknown): number => {
-    if (typeof value === 'number') {
-        return Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
-    }
+    if (typeof value === 'number') return Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
     if (typeof value !== 'string') return 0;
 
     const normalized = value.trim().replace(/[,\s+]/g, '');
@@ -683,89 +686,7 @@ export const parseXhsCount = (value: unknown): number => {
     return Math.round(base * multiplier);
 };
 
-export interface NormalizedXhsComment {
-    commentId: string;
-    userId: string;
-    author: string;
-    content: string;
-    likes: number;
-    parentCommentId?: string;
-    subComments: NormalizedXhsComment[];
-}
-
-const firstArray = (...values: any[]): any[] => {
-    for (const value of values) {
-        if (Array.isArray(value)) return value;
-    }
-    return [];
-};
-
-/**
- * Normalize the XHS Lite comment payload without making another request.
- * Lite has used both snake_case and camelCase fields across releases.
- */
-export const normalizeXhsComments = (payload: any): NormalizedXhsComment[] => {
-    const root = payload?.data && typeof payload.data === 'object' ? payload.data : payload || {};
-    const note = root.note || payload?.note || {};
-    const rawComments = firstArray(
-        root.comments?.list,
-        root.comments?.comment_list,
-        root.comment_list,
-        root.comments,
-        payload?.comments?.list,
-        payload?.comments?.comment_list,
-        payload?.comment_list,
-        payload?.comments,
-        note.comments?.list,
-        note.comments?.comment_list,
-        note.comment_list,
-        note.comments,
-    );
-
-    const normalizeComment = (comment: any, parentCommentId?: string): NormalizedXhsComment => {
-        const user = comment?.userInfo || comment?.user_info || comment?.user || {};
-        const commentId = String(comment?.id || comment?.commentId || comment?.comment_id || '');
-        const rawReplies = firstArray(
-            comment?.subComments,
-            comment?.sub_comments,
-            comment?.sub_comment_list,
-            comment?.replies,
-        );
-        return {
-            commentId,
-            userId: String(
-                user.userId || user.user_id || comment?.userId || comment?.user_id || '',
-            ),
-            author: String(
-                user.nickname || user.name || comment?.nickname || comment?.userName
-                || comment?.user_name || comment?.author_name || comment?.author || '匿名',
-            ),
-            content: String(comment?.content || '').trim(),
-            likes: parseXhsCount(
-                comment?.likeCount ?? comment?.like_count ?? comment?.likes ?? 0,
-            ),
-            parentCommentId,
-            subComments: rawReplies.map((reply: any) => normalizeComment(reply, commentId || parentCommentId)),
-        };
-    };
-
-    return rawComments.map((comment: any) => normalizeComment(comment));
-};
-
-export const normalizeNote = (n: any): {
-    noteId: string;
-    title: string;
-    desc: string;
-    author: string;
-    authorId: string;
-    likes: number;
-    collects: number;
-    commentCount: number;
-    shareCount: number;
-    xsecToken?: string;
-    coverUrl?: string;
-    type?: string;
-} => {
+export const normalizeNote = (n: any): { noteId: string; title: string; desc: string; author: string; authorId: string; likes: number; xsecToken?: string; coverUrl?: string; type?: string } => {
     const card = n.noteCard || n.notecard;
     // 封面：cover 对象 / 字符串，或笔记图片列表首图（feed detail 返回 image_list）。
     const coverObj = card?.cover || n.cover || n.image_list?.[0] || card?.image_list?.[0];
@@ -774,12 +695,9 @@ export const normalizeNote = (n: any): {
         || coverObj?.info_list?.[0]?.url || undefined;
     const coverUrl = rawCoverUrl?.replace(/^http:\/\//, 'https://');
     // 点赞数：支持 interactInfo.likedCount (profile notes) 和 interact_info.liked_count (search results)
-    const interact = n.interact_info || n.interactInfo
-        || card?.interact_info || card?.interactInfo || {};
-    const likesRaw = n.likes ?? n.liked_count ?? interact.liked_count ?? interact.likedCount ?? 0;
-    const collectsRaw = n.collects ?? n.collected_count ?? interact.collected_count ?? interact.collectedCount ?? 0;
-    const commentCountRaw = n.commentCount ?? n.comment_count ?? interact.comment_count ?? interact.commentCount ?? 0;
-    const shareCountRaw = n.shareCount ?? n.share_count ?? interact.share_count ?? interact.shareCount ?? 0;
+    const likesRaw = n.likes ?? n.liked_count
+        ?? n.interact_info?.liked_count ?? n.interactInfo?.likedCount
+        ?? card?.interact_info?.liked_count ?? card?.interactInfo?.likedCount ?? 0;
     return {
         noteId: n.noteId || n.note_id || n.id || card?.note_id || card?.noteId || card?.noteId || '',
         title: n.title || n.display_title || n.displayTitle || card?.display_title || card?.displayTitle || '',
@@ -787,9 +705,6 @@ export const normalizeNote = (n: any): {
         author: n.author || n.nickname || n.user?.nickname || n.user?.name || card?.user?.nickname || card?.user?.name || '',
         authorId: n.authorId || n.author_id || n.user?.user_id || n.user?.userId || card?.user?.user_id || card?.user?.userId || '',
         likes: parseXhsCount(likesRaw),
-        collects: parseXhsCount(collectsRaw),
-        commentCount: parseXhsCount(commentCountRaw),
-        shareCount: parseXhsCount(shareCountRaw),
         xsecToken: n.xsecToken || n.xsec_token || card?.xsec_token || card?.xsecToken || undefined,
         coverUrl,
         type: n.type || card?.type || undefined,
@@ -797,28 +712,28 @@ export const normalizeNote = (n: any): {
 };
 
 export const normalizeXhsLiteDetail = (payload: any, commentLimit = 15): ReturnType<typeof normalizeNote> & {
-    comments?: { author: string; content: string; likes: number; commentId?: string; userId?: string }[];
+    comments?: { author: string; content: string; likes: number }[];
 } => {
-    const root = payload?.data && typeof payload.data === 'object' ? payload.data : payload || {};
-    const note = normalizeNote(root.note || payload?.note || payload || {});
-    const comments: { author: string; content: string; likes: number; commentId?: string; userId?: string }[] = [];
-
-    const appendComments = (items: NormalizedXhsComment[]) => {
-        for (const item of items) {
-            if (comments.length >= commentLimit) return;
-            if (item.content) {
-                comments.push({
-                    author: item.author,
-                    content: item.content,
-                    likes: item.likes,
-                    commentId: item.commentId || undefined,
-                    userId: item.userId || undefined,
-                });
-            }
-            appendComments(item.subComments);
+    const root = payload?.data || payload || {};
+    const note = normalizeNote(root.note || {});
+    const rawComments = Array.isArray(root.comments?.list) ? root.comments.list : [];
+    const comments: { author: string; content: string; likes: number }[] = [];
+    const appendComment = (comment: any) => {
+        const normalized = {
+            author: comment.nickname || comment.user?.nickname || '匿名',
+            content: String(comment.content || '').trim(),
+            likes: parseXhsCount(comment.like_count ?? comment.likes ?? 0),
+        };
+        if (normalized.content && comments.length < commentLimit) comments.push(normalized);
+        const replies = Array.isArray(comment.sub_comments) ? comment.sub_comments : [];
+        for (const reply of replies) {
+            if (comments.length >= commentLimit) break;
+            appendComment(reply);
         }
     };
-    appendComments(normalizeXhsComments(payload));
-
+    for (const comment of rawComments) {
+        if (comments.length >= commentLimit) break;
+        appendComment(comment);
+    }
     return comments.length ? { ...note, comments } : note;
 };
