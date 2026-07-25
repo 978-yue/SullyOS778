@@ -1191,6 +1191,92 @@ const XHSLite = (() => {
     for (const part of s.split(';')) { const i = part.indexOf('='); if (i === -1) continue; out[part.slice(0, i).trim()] = part.slice(i + 1).trim(); }
     return out;
   }
+  function hasBrowserCommentReader(env) {
+    return !!(env?.CF_BROWSER_RENDERING_ACCOUNT_ID && env?.CF_BROWSER_RENDERING_API_TOKEN);
+  }
+  function browserCookieList(cookieStr) {
+    return Object.entries(parseCookies(cookieStr))
+      .filter(([name, value]) => name && value)
+      .map(([name, value]) => ({
+        name,
+        value,
+        domain: '.xiaohongshu.com',
+        path: '/',
+        secure: true,
+      }));
+  }
+  function decodeBrowserCommentPayload(html) {
+    const match = String(html || '').match(/SULLY_XHS_COMMENTS:([A-Za-z0-9+/=]+)/);
+    if (!match) throw new Error('Browser Rendering did not return a comment payload');
+    const bytes = Uint8Array.from(atob(match[1]), (char) => char.charCodeAt(0));
+    const payload = JSON.parse(new TextDecoder().decode(bytes));
+    if (!Array.isArray(payload?.comments)) throw new Error('Browser Rendering returned an invalid comment payload');
+    return payload.comments;
+  }
+  function browserCommentExtractorScript() {
+    return `(() => {
+      const text = (node) => (node?.textContent || '').trim();
+      const read = (element) => {
+        const body = element.querySelector(':scope > .comment-inner-container > .right');
+        const authorLink = body?.querySelector('.author a.name, .author .name');
+        const href = authorLink?.getAttribute('href') || '';
+        const userMatch = href.match(/\\/user\\/profile\\/([^/?#]+)/);
+        return {
+          id: (element.id || '').replace(/^comment-/, ''),
+          content: text(body?.querySelector(':scope > .content')),
+          like_count: text(body?.querySelector('.interactions .like .count')) || '0',
+          user_info: {
+            nickname: text(authorLink) || text(body?.querySelector('.author')),
+            user_id: userMatch?.[1] || '',
+          },
+          sub_comments: [],
+        };
+      };
+      setTimeout(() => {
+        const roots = [...document.querySelectorAll('.comment-item:not(.comment-item-sub)')];
+        const comments = roots.map((root) => {
+          const comment = read(root);
+          comment.sub_comments = [...root.querySelectorAll('.comment-item-sub')].map(read);
+          return comment;
+        }).filter((comment) => comment.id && comment.content);
+        const json = JSON.stringify({ comments });
+        const bytes = new TextEncoder().encode(json);
+        let binary = '';
+        for (const byte of bytes) binary += String.fromCharCode(byte);
+        document.body.textContent = 'SULLY_XHS_COMMENTS:' + btoa(binary);
+      }, 5500);
+    })();`;
+  }
+  async function browserRenderedComments(env, cookieStr, feedId, xsecToken, xsecSource) {
+    const accountId = env.CF_BROWSER_RENDERING_ACCOUNT_ID;
+    const apiToken = env.CF_BROWSER_RENDERING_API_TOKEN;
+    const noteUrl = new URL(`${WWW}/explore/${encodeURIComponent(feedId)}`);
+    if (xsecToken) noteUrl.searchParams.set('xsec_token', xsecToken);
+    noteUrl.searchParams.set('xsec_source', xsecSource || 'pc_feed');
+    const endpoint = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/browser-rendering/content?cacheTTL=0`;
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${apiToken}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        url: noteUrl.toString(),
+        cookies: browserCookieList(cookieStr),
+        addScriptTag: [{ content: browserCommentExtractorScript() }],
+        gotoOptions: { waitUntil: 'domcontentloaded', timeout: 30000 },
+        waitForTimeout: 7000,
+        actionTimeout: 45000,
+        bestAttempt: true,
+      }),
+    });
+    const body = await response.json().catch(() => null);
+    if (!response.ok || body?.success === false) {
+      const message = body?.errors?.[0]?.message || `Browser Rendering HTTP ${response.status}`;
+      throw new Error(message);
+    }
+    return decodeBrowserCommentPayload(typeof body === 'string' ? body : body?.result);
+  }
   function baseHeaders(cookieStr) {
     return {
       accept: 'application/json, text/plain, */*', 'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
@@ -1317,7 +1403,7 @@ const XHSLite = (() => {
     const items = (r?.data?.items || []).filter((it) => it.id && (it.note_card || it.model_type === 'note'));
     return { feeds: items.map(normItem), success: !!r?.success, msg: r?.msg, raw_error: r?.success ? undefined : r };
   }
-  async function getFeedDetail(cookieStr, feedId, xsecToken, { xsecSource = 'pc_feed', loadComments = true } = {}) {
+  async function getFeedDetail(cookieStr, feedId, xsecToken, { xsecSource = 'pc_feed', loadComments = true, env = null } = {}) {
     const ck = parseCookies(cookieStr);
     const payload = { source_note_id: feedId, image_formats: IMG_FORMATS, extra: { need_body_topic: '1' }, xsec_source: xsecSource || 'pc_feed', xsec_token: xsecToken || '' };
     const r = await signedPost(EDITH, '/api/sns/web/v1/feed', payload, cookieStr, ck, { 'xy-direction': '13' });
@@ -1327,8 +1413,12 @@ const XHSLite = (() => {
     let commentsError = null;
     if (loadComments) {
       try {
-        const cr = await signedGetComments(EDITH, '/api/sns/web/v2/comment/page', { note_id: feedId, cursor: '', top_comment_id: '', image_formats: 'jpg,webp,avif', xsec_token: xsecToken || '' }, cookieStr, ck);
-        comments = (cr?.data?.comments || []).map(normComment);
+        if (hasBrowserCommentReader(env)) {
+          comments = (await browserRenderedComments(env, cookieStr, feedId, xsecToken || '', xsecSource)).map(normComment);
+        } else {
+          const cr = await signedGetComments(EDITH, '/api/sns/web/v2/comment/page', { note_id: feedId, cursor: '', top_comment_id: '', image_formats: 'jpg,webp,avif', xsec_token: xsecToken || '' }, cookieStr, ck);
+          comments = (cr?.data?.comments || []).map(normComment);
+        }
       } catch (error) {
         commentsError = {
           message: error instanceof Error ? error.message : String(error),
@@ -1472,12 +1562,12 @@ const XHSLite = (() => {
     return { success: true, note_id: noteId, noteId, msg: '发布成功', raw: r };
   }
 
-  async function handle(command, body, cookie) {
+  async function handle(command, body, cookie, env = null) {
     switch (command) {
       case 'check-login': return checkLogin(cookie);
       case 'search': return search(cookie, body.keyword || '', { sort: body.sort_by, page: body.page });
       case 'list-feeds': return listFeeds(cookie, { category: body.category, cursorScore: body.cursor_score, noteIndex: body.note_index });
-      case 'get-feed-detail': return getFeedDetail(cookie, body.feed_id, body.xsec_token, { xsecSource: body.xsec_source, loadComments: body.load_all_comments !== false });
+      case 'get-feed-detail': return getFeedDetail(cookie, body.feed_id, body.xsec_token, { xsecSource: body.xsec_source, loadComments: body.load_all_comments !== false, env });
       case 'post-comment': return postComment(cookie, body.feed_id, body.content, { xsecToken: body.xsec_token });
       case 'reply-comment': return postComment(cookie, body.feed_id, body.content, { targetCommentId: body.comment_id, xsecToken: body.xsec_token });
       case 'like-feed': return likeFeed(cookie, body.feed_id, !!body.unlike);
@@ -1502,7 +1592,7 @@ const XHSLite = (() => {
       generateB1,
       signComments: COMMENT_SIGNER_432.signer,
       commentSignerError: COMMENT_SIGNER_432.error,
-      _internals: { md5Hex, encodeCustomStr, crc32JsInt },
+      _internals: { md5Hex, encodeCustomStr, crc32JsInt, decodeBrowserCommentPayload, browserCommentExtractorScript },
     },
   };
 })();
@@ -1527,7 +1617,14 @@ export default {
       const command = apiMatch[1].replace(/\/+$/, '');
       // 探活：前端 testConnection 会先 GET /api/health（不带 cookie），不能要求鉴权
       if (command === 'health') {
-        return jsonResponse({ status: 'ok', backend: 'xhs-lite', signing: 'xhshow-pure-js' }, { origin });
+        return jsonResponse({
+          status: 'ok',
+          backend: 'xhs-lite',
+          signing: 'xhshow-pure-js',
+          comment_reader: env?.CF_BROWSER_RENDERING_ACCOUNT_ID && env?.CF_BROWSER_RENDERING_API_TOKEN
+            ? 'browser-rendering'
+            : 'direct-api',
+        }, { origin });
       }
       let body = {};
       if (request.method === 'POST') { try { body = await request.json(); } catch (e) { /* allow empty */ } }
@@ -1535,7 +1632,7 @@ export default {
       if (!cookie) return jsonResponse({ error: '未配置 cookie。请在 SullyOS 设置里粘贴小红书 cookie。' }, { status: 401, origin });
       if (!cookie.includes('a1=')) return jsonResponse({ error: 'cookie 缺少 a1 字段，请复制完整的小红书 cookie。' }, { status: 400, origin });
       try {
-        const result = await XHSLite.handle(command, body, cookie);
+        const result = await XHSLite.handle(command, body, cookie, env);
         if (result === null) return jsonResponse({ error: `Unknown command: ${command}` }, { status: 404, origin });
         return jsonResponse(result, { origin });
       } catch (e) {
