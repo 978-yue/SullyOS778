@@ -1227,12 +1227,16 @@ const XHSLite = (() => {
       method: 'GET',
       headers: {
         ...baseHeaders(cookieStr),
+        'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
+        'cache-control': 'no-cache',
+        pragma: 'no-cache',
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0',
         'sec-ch-ua': '"Not A(Brand";v="99", "Microsoft Edge";v="121", "Chromium";v="121"',
         'x-s': signed.xs,
         'x-s-common': signed.xs_common,
         'x-t': String(signed.xt),
         'x-b3-traceid': b3TraceId(),
+        'x-xray-traceid': xrayTraceId(signed.xt),
       },
     });
     const data = await resp.json().catch(() => ({}));

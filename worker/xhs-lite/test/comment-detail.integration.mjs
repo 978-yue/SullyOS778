@@ -24,6 +24,9 @@ globalThis.fetch = async (url, init = {}) => {
     const headers = new Headers(init.headers);
     assert.match(headers.get('x-s') || '', /^XYS_/);
     assert.match(headers.get('user-agent') || '', /Chrome\/121/);
+    assert.equal(headers.get('cache-control'), 'no-cache');
+    assert.equal(headers.get('pragma'), 'no-cache');
+    assert.match(headers.get('x-xray-traceid') || '', /^[0-9a-f]{32}$/);
     assert.match(String(url), /image_formats=jpg%2Cwebp%2Cavif/);
     return Response.json({
       success: true,
